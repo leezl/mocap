@@ -40,31 +40,31 @@ class Skeleton {
   var defaultLength : Double
   var defaultMass : Double
   var angleUnit : String //in case we need to swap radians and degrees
-  var skel : List[SkeletonSegment]
   var originalFileType : String
+  var skel : List[SkeletonSegment]
   var motions : List[String]
   var newrep: List[Double]
   var grdvel: List[Double]
   var velocity: Double
   
   class Root {
-    var order : List[String]
-    var axis : String
-    var position : List[Int]
-    var orientation : List[Int]
+    var order : List[String] = Nil
+    var axis : String = ""
+    var position : List[Int] = Nil
+    var orientation : List[Int] = Nil
   }
   
   class SkeletonSegment extends Actor {
-    var mass : Double
-    var length : Double
-    var id : Int
-    var name : String
-    var direction : List[Double]
-    var axis : List[Double]
-    var dof : List[String]
-    var limits : List[Double]
-    var parent : Int
-    var children : List[Int]  //store id of children for now
+    var mass : Double= 0.0
+    var length : Double =0.0
+    var id : Int = -1
+    var name :String = ""
+    var direction : List[Double] = Nil
+    var axis : List[Double] = Nil
+    var dof : List[String] = Nil
+    var limits : List[(Double,Double)] = Nil
+    var parent : Int = -1
+    var children : List[Int] = Nil //store id of children for now
 
     def act(){
       //apply translation
@@ -84,6 +84,83 @@ class Skeleton {
 
   }
 
+  def loadAcclaimFileASF(filename : String){     //Skeleton
+    originalFileType = "acclaim"
+    name = filename
+    //open file
+    val line = fromFile(filename).getLines()
+    var where = ""
+    var lin = Nil
+    var temp = new SkeletonSegment
+    //read a line
+    for(text<-line){
+      lin = text.split("""[\s]+""")
+      if (lin(0)==""){
+        lin = lin.tail
+      }
+      lin(0) match{
+        case "end" =>
+          //store current segment
+          skel = temp :: skel
+          temp = new SkeletonSegment
+        case "mass" =>
+          if(where==""){
+            defaultMass = lin(2).toDouble()
+          }
+        case "length" =>
+          if(where==""){
+            defaultLength = lin(2).toDouble()
+          } else{
+            temp.length = lin(2)
+          }
+        case "angle" => angleUnit = lin(2)
+        case "order" => Root.order = lin.tail
+        case "id" => temp.id =lin(2)
+        case "name" => temp.name = lin(2)
+        case "direction" =>
+          temp.direction = lin(4).toInt :: temp.direction
+          temp.direction = lin(3).toInt :: temp.direction
+          temp.direction = lin(2).toInt :: temp.direction
+        case "dof" =>
+          for(i<-2 until lin.length){
+            temp.dof = lin(i) :: temp.dof
+          }
+        case "limits" =>
+          where = "limits"
+          temp.limits = ((lin(3).replace("(","")).toDouble , (lin(4).replace(")","")).toDouble)
+        case "(_*" =>
+          temp.limits = ((lin(2).replace("(","")).toDouble , (lin(3).replace(")","")).toDouble)
+        case "axis" =>
+          if(where==":root"){
+            Root.axis = lin(2)
+          } else{
+            temp.axis = lin(4).toDouble :: temp.axis
+            temp.axis = lin(3).toDouble :: temp.axis
+            temp.axis = lin(2).toDouble :: temp.axis
+          }
+        case "position" =>
+          Root.position = lin(4).toInt :: Root.position
+          Root.position = lin(3).toInt :: Root.position
+          Root.position = lin(2).toInt :: Root.position
+        case "orientation" =>
+          Root.orientation = lin(4).toInt :: Root.orientation
+          Root.orientation = lin(3).toInt :: Root.orientation
+          Root.orientation = lin(2).toInt :: Root.orientation
+        case ":root" => where = ":root"
+        case ":bonedata" => where =":bonedata"
+        case _ => {}
+        }
+      }
+    }
+
+  def loadAcclaimFileACM(filename : String){     //Motion
+    //open file
+    val line = fromFile(filename).getLines()
+    var where = ""
+    var lin = Nil
+    //var temp =
+  }
+
   def downsampling(rate : Int) {
     motions.filter()
   }
@@ -96,51 +173,4 @@ class Skeleton {
 
   }
 
-  def loadAcclaimFile(filename : String){
-    originalFileType = "acclaim"
-    name = filename
-    //open file
-    val line = fromFile(filename).getLines()
-    var where = ""
-    var lin = Nil
-    var temp = new SkeletonSegment
-    //read a line
-    for(text<-line){
-      lin = text.split("""[\s]+""")
-      if(lin(0)==""){//if tab first check second
-        lin(1) match{
-          case "end" =>
-            //store current segment
-            skel = temp :: skel
-            temp = new SkeletonSegment
-          case "mass" =>
-            if(where==""){
-              defaultMass = lin(2).toDouble()
-            }
-          case "length" =>
-            if(where==""){
-              defaultLength = lin(2).toDouble()
-            }
-          case "angle" => angleUnit = lin(2)
-          case "order" => Root.order = lin.tail
-          case "axis" => 
-            if(where==":root"){
-              Root.axis = lin(2)
-            } else{
-
-            }
-        }
-      } else{
-        lin(0) match{
-          case "end" =>
-            //store current segment
-            skel = temp :: skel
-            temp = new SkeletonSegment
-          case ":root" => where = ":root"
-          case ":bonedata" => where =":bonedata"
-        }
-      }
-    }
   }
-
-}
