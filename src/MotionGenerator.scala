@@ -10,7 +10,7 @@ import util.Random
  * Had this class already, didn't make it from Windows to github.
  */
 
-class MotionGenerator {
+class MotionGenerator (skeletonFile : String, motionFiles : List[String]) {
   //set initial variables
   //nX = Model order: time looked forward and back in each layer
   val n1 = 3
@@ -21,8 +21,16 @@ class MotionGenerator {
   val rand = new Random(System.currentTimeMillis())
 
   //load data (file/list of files)
+  //soooo...only use data from one skeleton? limits data and system.
+  // Add skeleton to data going into network?: larger rewrite. Change later.
+  //default asf for now? Load one .asf skel, then load motions?(.acm)
+  val skel = new Skeleton
+
+  skel.loadSkeleton(skeletonFile)
+  motionFiles.foreach(file => loadMotion)
 
   //Downsample/ preprocess (Put these together? why didn't they?)
+
 
   //
 }
