@@ -1,5 +1,6 @@
 import scala.io.Source._
 import scala.actors._
+import scala.actors.Actor._
 
 /**
  * Created by IntelliJ IDEA.
@@ -38,13 +39,41 @@ class Skeleton {
   var name : String
   var defaultLength : Double
   var defaultMass : Double
-  var angleUnit : String
-  var skel : String
+  var angleUnit : String //in case we need to swap radians and degrees
+  var skel : List[SkeletonSegment]
   var originalFileType : String
   var motions : List[String]
   var newrep: List[Double]
   var grdvel: List[Double]
   var velocity: Double
+  
+  class Root {
+    var order : List[String]
+    var axis : String
+    var position : List[Int]
+    var orientation : List[Int]
+  }
+  
+  class SkeletonSegment extends Actor {
+    var mass : Double
+    var length : Double
+    var id : Int
+    var name : String
+    var direction : List[Double]
+    var axis : List[Double]
+    var dof : List[String]
+    var limits : List[Double]
+    var parent : Int
+    var children : List[Int]  //store id of children for now
+
+    def act(){
+      //apply translation
+
+      //pass translation to children
+
+    }
+
+  }
 
   //def load function: check file type: bvh, asf & acm, or txt?
   def loadSkeleton(filename: String) {
@@ -74,11 +103,16 @@ class Skeleton {
     val line = fromFile(filename).getLines()
     var where = ""
     var lin = Nil
+    var temp = new SkeletonSegment
     //read a line
     for(text<-line){
       lin = text.split("""[\s]+""")
       if(lin(0)==""){//if tab first check second
         lin(1) match{
+          case "end" =>
+            //store current segment
+            skel = temp :: skel
+            temp = new SkeletonSegment
           case "mass" =>
             if(where==""){
               defaultMass = lin(2).toDouble()
@@ -87,14 +121,24 @@ class Skeleton {
             if(where==""){
               defaultLength = lin(2).toDouble()
             }
-          case "angle" =>
-            angleUnit = lin(2)
+          case "angle" => angleUnit = lin(2)
+          case "order" => Root.order = lin.tail
+          case "axis" => 
+            if(where==":root"){
+              Root.axis = lin(2)
+            } else{
+
+            }
         }
       } else{
-          lin(0) match{
-            case ":root" =>
-            case ":bonedata" => where =":bonedata"
-          }
+        lin(0) match{
+          case "end" =>
+            //store current segment
+            skel = temp :: skel
+            temp = new SkeletonSegment
+          case ":root" => where = ":root"
+          case ":bonedata" => where =":bonedata"
+        }
       }
     }
   }
