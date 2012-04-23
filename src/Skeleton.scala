@@ -47,14 +47,11 @@ class Skeleton {
   var grdvel: List[Double]
   var velocity: Double
   
-  class Root {
+  class SkeletonSegment extends Actor {
     var order : List[String] = Nil
-    var axis : String = ""
+    var axisCode : String = ""
     var position : List[Int] = Nil
     var orientation : List[Int] = Nil
-  }
-  
-  class SkeletonSegment extends Actor {
     var mass : Double= 0.0
     var length : Double =0.0
     var id : Int = -1
@@ -63,8 +60,8 @@ class Skeleton {
     var axis : List[Double] = Nil
     var dof : List[String] = Nil
     var limits : List[(Double,Double)] = Nil
-    var parent : Int = -1
-    var children : List[Int] = Nil //store id of children for now
+    var parent : String = ""
+    var children : List[String] = Nil //store name of children for now
 
     def act(){
       //apply translation
@@ -94,12 +91,28 @@ class Skeleton {
     var temp = new SkeletonSegment
     //read a line
     for(text<-line){
+      //get rid of whitespace
       lin = text.split("""[\s]+""")
       if (lin(0)==""){
         lin = lin.tail
-      }
+      } else if(where == ":hierarchy"){
+        //add connections between segments
+        val currentParent = skel.find(item => item.name==lin(0))
+        currentParent match{
+          case Some(segment)=>
+            for (j<-1 until  lin.length){
+              segment.children = lin(i) :: segment.children
+              val currentChild = skel.find(item2 => item2.name==lin(i))
+              currentChild match{
+                case Some(segmentC)=> segmentC.parent = lin(0)
+                case None => println("No Child Bone...")
+              }
+            }
+          case None => println("Missing Bones...")
+        }
+      } //else: match line values and assign them
       lin(0) match{
-        case "end" =>
+        case "begin" =>
           //store current segment
           skel = temp :: skel
           temp = new SkeletonSegment
@@ -114,7 +127,7 @@ class Skeleton {
             temp.length = lin(2)
           }
         case "angle" => angleUnit = lin(2)
-        case "order" => Root.order = lin.tail
+        case "order" => temp.order = lin.tail
         case "id" => temp.id =lin(2)
         case "name" => temp.name = lin(2)
         case "direction" =>
@@ -132,22 +145,27 @@ class Skeleton {
           temp.limits = ((lin(2).replace("(","")).toDouble , (lin(3).replace(")","")).toDouble)
         case "axis" =>
           if(where==":root"){
-            Root.axis = lin(2)
+            temp.axisCode = lin(2)
           } else{
             temp.axis = lin(4).toDouble :: temp.axis
             temp.axis = lin(3).toDouble :: temp.axis
             temp.axis = lin(2).toDouble :: temp.axis
           }
         case "position" =>
-          Root.position = lin(4).toInt :: Root.position
-          Root.position = lin(3).toInt :: Root.position
-          Root.position = lin(2).toInt :: Root.position
+          temp.position = lin(4).toInt :: temp.position
+          temp.position = lin(3).toInt :: temp.position
+          temp.position = lin(2).toInt :: temp.position
         case "orientation" =>
-          Root.orientation = lin(4).toInt :: Root.orientation
-          Root.orientation = lin(3).toInt :: Root.orientation
-          Root.orientation = lin(2).toInt :: Root.orientation
-        case ":root" => where = ":root"
+          temp.orientation = lin(4).toInt :: temp.orientation
+          temp.orientation = lin(3).toInt :: temp.orientation
+          temp.orientation = lin(2).toInt :: temp.orientation
+        case ":root" =>
+          where = ":root"
+          temp.name = "root"
         case ":bonedata" => where =":bonedata"
+        case ":hierarchy" =>
+          where = ":hierarchy"
+          skel = skel.reverse  //to try and put in order from root out
         case _ => {}
         }
       }
