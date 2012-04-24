@@ -97,18 +97,22 @@ class Skeleton {
         lin = lin.tail
       } else if(where == ":hierarchy"){
         //add connections between segments
-        val currentParent = skel.find(item => item.name==lin(0))
-        currentParent match{
-          case Some(segment)=>
-            for (j<-1 until  lin.length){
-              segment.children = lin(i) :: segment.children
-              val currentChild = skel.find(item2 => item2.name==lin(i))
-              currentChild match{
-                case Some(segmentC)=> segmentC.parent = lin(0)
-                case None => println("No Child Bone...")
+        if (lin(0)=="begin" || lin(0)=="end"){
+          //assume these don't matter after hierarchy(only one skel per file)
+        } else {
+          val currentParent = skel.find(item => item.name==lin(0))
+          currentParent match{
+            case Some(segment)=>
+              for (j<-1 until  lin.length){
+                segment.children = lin(i) :: segment.children
+                val currentChild = skel.find(item2 => item2.name==lin(i))
+                currentChild match{
+                  case Some(segmentC)=> segmentC.parent = lin(0)
+                  case None => println("No Child Bone...")
+                }
               }
-            }
-          case None => println("Missing Bones...")
+            case None => println("Missing Bones...")
+          }
         }
       } //else: match line values and assign them
       lin(0) match{
