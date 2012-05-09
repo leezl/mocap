@@ -1,4 +1,4 @@
-package main
+package main.scala
 
 /**
  * Created by IntelliJ IDEA.
@@ -10,12 +10,11 @@ package main
  * This should be the main class for running, but SBT can't find it...
  */
 
-class GeneratorMain {
-  def main(args: Array[String]) {
-    val skel = new Skeleton
+object GeneratorMain {
+  val skel = new Skeleton
 
-    skel.loadAcclaimFileASF(args(0))
-    skel.printSkeletonDebug()
+  def main(args: Array[String]) {
+
   }
 
 }
