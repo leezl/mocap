@@ -6,7 +6,15 @@ import scalala.tensor.dense.CommonDenseVectorConstructors._
 import collection.generic.GenericCompanion._
 import scala.MathCommon._
 import scala.collection.mutable._
-import scalala.library._
+import scalala.scalar._
+import scalala.tensor.::
+import scalala.tensor.mutable._
+import scalala.tensor.sparse._
+import scalala.library.Library._
+import scalala.library.LinearAlgebra._
+import scalala.library.Statistics._
+import scalala.library.Plotting._
+import scalala.operators.Implicits._
 
 /**
  * Created by IntelliJ IDEA.
@@ -28,16 +36,18 @@ class MotionGenerator() {
   var numvalidatebatches = 0
   var minibatchsize = 0 //?
   var numdims = 0
+  var numcases = 0
   var batchIndex = MutableList[Double]()
   //contains List of DenseVectors (batches of indexes into batchData)
   var minibatchIndex = MutableList[DenseVector]()
+  //var batchData = DenseMatrix.zeros[Double](3,3) //created in init, passed to all
   //Default network properties:
   var numhid1 = 150
   var numhid2 = 150
   var numepochs = 2000
   var gsd = 1   //gaussian std dev
-  var nt = n1 //crbm order how far forward and back (3 default)
-  var numhid = numhid1
+  //var nt = n1, n2, etc //crbm order how far forward and back (3 default)
+  //var numhid = numhid1, numhid2, etc
   var restart = 1
   //Randoms: need uniform and gaussian random weights for matrices in crbms;
   //  may need 2 separate? can't see where they needed uniform dist.
@@ -62,17 +72,17 @@ class MotionGenerator() {
     //split into minibatches (collect indices into batchData for this)
     preprocessing3()
     //Bone dimensions
-    var numdims = batchData.numCols
+    numdims = batchData.numCols
     //GET some intializer frames
     if (batchData.numRows>100){
       var initialScene = batchData(1 to  100, ::) //get first hundred (check longer then 100)
     }
     //try running
-    println("Training Layer 1 CRBM, order " + nt + " :" + numdims + " - " + numhid)
-    gaussiancrbm(batchData)
+    println("Training Layer 1 CRBM, order " + n1 + " :" + numdims + " - " + numhid1)
+    gaussiancrbm(batchData, n1, numhid1)
   }
   
-  def gaussiancrbm(batchData : DenseMatrix[Double]) {
+  def gaussiancrbm(batchData : DenseMatrix[Double], nt : Int, humhid : Int) {
     var numbatches = minibatchIndex.length
     //need numdims, have in main numdims = batchData.numCols (==numBoneVals)
     //Learning Rates:
@@ -81,74 +91,94 @@ class MotionGenerator() {
     var epsilonbj = 1*10^-3  //hidden units
     var epsilonA = 1*10^-3   //autoregressive
     var epsilonB = 1*10^-3   //prev visibles to hidden
+    var wgrad = DenseMatrix.zeros[Double](numhid,numdims) //make a default for now
+    var negwgrad = DenseMatrix.zeros[Double](numhid,numdims)
+    var negbigrad = DenseVector.zeros[Double](numdims)
+    var negbjgrad = DenseVector.zeros[Double](numhid)
+    var w : DenseMatrix[Double] = 0.01*randn(numhid, numdims)                  //w(numhid,numdims)
+    var bi = 0.01*DenseVector.randn(numdims)
+    var bj = -1+0.01*DenseVector.randn(numhid)  //favor OFF units
+    var bigrad = DenseVector.zeros[Double](numdims)
+    var bjgrad = DenseVector.zeros[Double](numhid)
+    //autoregressive weights: A(:,:,j) weight from t-j to visible
+    var A = MutableList[DenseMatrix[Double]]()
+    var Aupdate = MutableList[DenseMatrix[Double]]()
+    var Agrad = MutableList[DenseMatrix[Double]]()
+    var negAgrad = MutableList[DenseMatrix[Double]]()
+    //weights from previous timesteps to hiddens: B(:,:,j) is weight from t-j to hidden layer
+    var B = MutableList[DenseMatrix[Double]]()
+    var Bupdate = MutableList[DenseMatrix[Double]]()
+    var Bgrad = MutableList[DenseMatrix[Double]]()
+    var negBgrad = MutableList[DenseMatrix[Double]]()
+    ///
+    var wupdate = DenseMatrix.zeros[Double](numhid, numdims)//.zero //
+    var biupdate = DenseVector.zeros[Double](numdims)//.zero //
+    var bjupdate = DenseVector.zeros[Double](numhid)//.zero //
 
     var wdecay = 0.0002  //same decay for all..
     var mom = 0.9        //momentum
+
+    //get matrix Lists set up
+    for (i<- 0 until nt){
+      A += 0.01*DenseMatrix.randn(numdims,numdims)
+      Aupdate += DenseMatrix.zeros[Double](numdims,numdims)
+      Agrad += DenseMatrix.zeros[Double](numdims,numdims)
+      negAgrad += DenseMatrix.zeros[Double](numdims,numdims)
+      B += 0.01*DenseMatrix.randn(numhid,numdims)
+      Bupdate += DenseMatrix.zeros[Double](numhid,numdims)
+      Bgrad += DenseMatrix.zeros[Double](numhid,numdims)
+      negBgrad += DenseMatrix.zeros[Double](numhid,numdims)
+    }
     
     if (restart == 1){
       restart = 0
       epoch = 1
 
       //Initialize Weights
-      var w : DenseMatrix[Double] = 0.01*randn(numhid, numdims)
-      var bi = 0.01*DenseMatrix.randn(numdims,1)
-      var bj = -1+0.01*DenseMatrix.randn(numhid,1)  //favor OFF units
-
-      //autoregressive weights: A(:,:,j) weight from t-j to visible
-      var A = MutableList[DenseMatrix[Double]]()
+      //empty all:
+      wgrad.zero
+      bigrad.zero
+      bjgrad.zero
+      negwgrad.zero
+      negbigrad.zero
+      negbjgrad.zero
+      //Keep previous updates for momentum?
+      wupdate.zero //
+      biupdate.zero //
+      bjupdate.zero //
       for (i<- 0 until nt){
-        A += 0.01*DenseMatrix.randn(numdims,numdims)
-      }
-      //weights from previous timesteps to hiddens: B(:,:,j) is weight from t-j to hidden layer
-      var B = MutableList[DenseMatrix[Double]]()
-      for (i<- 0 until nt){
-        B += 0.01*DenseMatrix.randn(numhid,numdims)
-      }
-      //empty all: wgrad, bigrad,bjgrad,Agrad,Bgrad,newgrad,negbiggrad,negbjgrad,negAgrad,nedBgrad
-      
-      //Keep previous updates for momentum
-      wupdate = DenseMatrix.zeros[Double](numhid, numdims)//.zero //
-      biupdate = DenseVector.zeros[Double](numdims)//.zero //
-      bjupdate = DenseVector.zeros[Double](numhid)//.zero //
-      /*
-      for (i<- 0 until Aupdate.length){
+        A(i)= 0.01*DenseMatrix.randn(numdims,numdims)
         Aupdate(i).zero
-      }
-      */
-      Aupdate = MutableList[DenseMatrix[Double]]()
-      for (i<- 0 until nt){
-        Aupdate += DenseMatrix.zeros[Double](numdims,numdims)
-      }
-      /*
-      for (i<- 0 until Bupdate.length){
+        Agrad(i).zero
+        negAgrad(i).zero
+        B(i) = 0.01*DenseMatrix.randn(numhid,numdims)
         Bupdate(i).zero
+        Bgrad(i).zero
+        negBgrad(i).zero
       }
-      */
-
-     Bupdate = MutableList[DenseMatrix[Double]]()
-     for (i<- 0 until nt){
-       Bupdate += DenseMatrix.zeros[Double](numhid,numdims)
-     }
       
-    }//be sure updates leave here with values
+    }//be sure updates leave here with 0 values
     
     //MAIN//
+    //Loop across Epochs
     for (epoch<-epoch until numepochs){
       var errsum=0
-      for (batch = 1 until numbatches){
+      //Loop Across Batches
+      for (batch <- 1 until numbatches){
         ///POSITIVE PHASE///
         numcases = minibatchIndex(batch).length //length of Vector at current batch location (frames)
         var mb = miniBatchIndex(batch)          //contains indices of current batch
-        
         //data is current and delay data (First Batch current frame + previous nt frames)
         var data = MutableList[DenseMatrix[Double]]()
-        for (i<- 0 until nt){
-          data += DenseMatrix.zeros[Double](numcases,numdims)
-        }
         var tempMatrix = DenseMatrix.zeros[Double](numcases,numdims)
+        //get matrix Lists set up
+        for (i<- 0 until nt){
+          data += DenseMatrix.zeros[Double](numcases,numdims)   //data(numcases,numdims)
+        }
         for (i<- 0 until numcases){
            tempMatrix(i, ::) = batchData(minibatchIndex(i), ::)
         }
+        //set first data vals
         data(0) = tempMatrix
         for (hh<- 1 until nt){
           for (i<- 0 until numcases){
@@ -158,23 +188,17 @@ class MotionGenerator() {
         }
 
         //Calculate autoregressive connection contributions
-        var bistar = DenseMatrix.zeros[Double](numdims, numcases)
-        for (hh<- 0 until nt){
-            bistar = bistar + A(hh) * data(hh+1).t
-        }
-
+        var bistar = DenseMatrix.zeros[Double](numdims, numcases)              //bistar(numdims,numcases)
         //Calculate visible to hidden contributions
-        var bjstar = DenseMatrix.zeros[Double](numhid, numcases)
+        var bjstar = DenseMatrix.zeros[Double](numhid, numcases)               //bjstar(numhid,numcases)
         for (hh<- 0 until nt){
+          bistar = bistar + A(hh) * data(hh+1).t
           bjstar = bjstar + B(hh) * data(hh+1).t
         }
 
-        //Calculate posterior probability (chance of hidden being on) REPMAT() Functions?
-        tempMatrix = DenseMatrix.zeros[Double](numhid,numcases)
-        for (i<-0 until numcases){
-          tempMatrix(::, i) = bj
-        }
-        var eta = w*((data(0) / gsd).t) + tempMatrix + bjstar
+        //Calculate posterior probability (chance of hidden being on)
+        tempMatrix = repmat(numcases, bj, 1)
+        var eta = w*((data(0) / gsd).t) + tempMatrix + bjstar                   //eta(numhid,numcases)
         /*var hposteriors = DenseMatrix.zeros[Double](numhid,numcases)
         for (i<-0 until numhid){
           for (j<-0 until numcases){
@@ -185,17 +209,96 @@ class MotionGenerator() {
         var hposteriors = 1/(1+exp(-eta))  //Does this really work?
 
         //Activate Hidden Units
-        var hidstates = (hposteriors.t > DenseMatrix.rand(numcases,numhid))//ummm
+        var hidstates = (hposteriors.t > DenseMatrix.rand(numcases,numhid))      //hidstates(numcases,numhid)
 
         //Calculate positive Gradients
-        //NEED TO STORE THESE UP TOP...KEEP VAL
-        var wgrad = hidstates.t * (data(0)/gsd)
-
-        //END POSISTIVE PHASE
+        //NEED TO STORE THESE UP TOP...KEEP VAL, but don't know size until here
+        wgrad = hidstates.t * (data(0)/gsd)                                      //wgrad(numhid,numdims)
+        tempMatrix = repmat(numcases, bi, 1)
+        bigrad = sum(data(0).t - tempMatrix - bistar, Axis.Vertical) / pow(gsd,2)//bigrad(numdims)
+        bjgrad = sum(hidstates, Axis.Horizontal).t                               //bjgrad(numhid)
         
-      }//end batch
+        for (hh<- 0 until nt){
+          Agrad(hh) = (data(0).t-repmat(numcases,bi,1)-bistar) /pow(gsd,2) *data(hh+1)//Agrad(0)(numdims,numdims)
+          Bgrad(hh) = hidstates.t * data(hh+1)                                   //Bgrad(0)(numhid,numdims)
+        }
+        //END POSISTIVE PHASE
+
+        //Activate the Visibles
+        //Find mean of Gaussian                                                 //topdown(numcases,numdims)
+        var topdown = gsd * (hidstates*w)
+        // //Add in gsd.*randn(numcases, numdims) for real sampling
+        negdata = topdown + repmat(numcases, bi.t,0) + bistar.t                 //negdata(numcases,numdims)
+        
+        //Conditional on negdata calculate posterior for hidden
+        eta = w  * (negdata/gsd).t + repmat(numcases, bj, 1)                    //eta(numhid,numcases)
+        hposteriors = 1/(1 + exp(-eta))                                         //hposteriors(numhid,numcases)
+        
+        //Calculate negative gradients
+        negwgrad = hposteriors*(negdata/gsd)                                    //negwgrad(numhid,numdims)
+        negbigrad = sum(negdata.t-repmat(numcases,bi,1)-bistar,Axis.Vertical)/pow(gsd,2)//negbigrad(numdims)
+        negbjgrad = sum(hposteriors, Axis.Vertical)                             //negbjgrad(numhid)
+        
+        for (hh<- 0  until nt){
+          negAgrad += (negdata.t-repmat(numcases,bi,1)-bistar)/pow(gsd,2) *data(hh+1)//negAgrad(numdims,numdims)
+          negBgrad += (hposteriors*data(hh+1))                                  //negBgrad(numhid,numdims)
+        }
+        
+        //END NEGATIVE PHASE
+        
+        err = (pow(data(0)-negdata, 2)).sum //single sum of all matrix elements
+        errsum += err
+        
+        //check momentum
+        if (epoch > 5){
+          momentum =mom
+        } else{
+          momentum=0
+        }
+        
+        //UPDATE WEIGHTS   (and biases)
+        wupdate = momentum*wupdate + epsilonw*((wgrad-negwgrad)/numcases - wdecay*w)//wupdate(numhid,numdims)
+        biupdate = momentum*biupdate + (epsilonbi/numcases)*(bigrad-negbigrad) //biupdate(numdims)
+        bjupdate = momentum*bjupdate + (epsilonbj/numcases)*(bjgrad-negbjgrad) //bjupdate(numhid)
+        
+        for (hh<- 0 until nt){
+          Aupdate(hh) = momentum*Aupdate(hh) + epsilonA*((Agrad(hh)-negAgrad(hh))/numcases - wdecay*A(hh))//Aupdate(numdims,numdims)
+          Bupdate(hh) = momentum*Bupdate(hh) + epsilonB*((Bgrad(hh)-negBgrad(hh))/numcases - wdecay*B(hh))//Bupdate(numhid,numdims)
+        }
+        w = w + wupdate
+        bi = bi + biupdate
+        bj = bj + bjupdate
+        
+        for (hh<- 0 until nt){
+          A(hh) = A(hh) + Aupdate(hh)
+          B(hh) = B(hh) + Bupdate(hh)
+        }
+        //END OF UPDATES
+        
+      }//end batches
+      
+      //print every 10 epochs
+      if (epoch%10 == 0){
+        println("epoch: " + epoch + "  error: " + errsum)
+        //plot? nah
+      }
     }//end current epoch training
     
+  }
+  
+  //Creates matrix out of repeating vector, dim is row(0) vs col(other) repeat 
+  def repmat(matSize : Int, vector : DenseVector[Double], dim : Boolean) : DenseMatrix[Double] = {
+    if (dim==0){
+      var matrix = DenseMatrix.zeros[Double](matSize, vector.length)
+      for (i<-0 until matSize){
+        matrix(i, ::) = vector.t //assume bj is column vector
+      }
+    } else {
+      var matrix = DenseMatrix.zeros[Double](vector.length, matSize)
+      for (i<-0 until matSize){
+        matrix(::, i) = vector
+      }
+    }
   }
 
   //
