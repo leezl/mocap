@@ -64,7 +64,7 @@ class MotionGenerator() {
   //Randoms: need uniform and gaussian random weights for matrices in crbms;
   //  may need 2 separate? can't see where they needed uniform dist.
   //  rand.nextDouble, rand.nextGaussian
-  val rand = new Random(System.currentTimeMillis())
+  //val rand = new Random(System.currentTimeMillis())
 
   //load data (file/list of files)
   //soooo...only use data from one skeleton? limits data and system.
@@ -79,6 +79,7 @@ class MotionGenerator() {
     //skel.downsampling(4)
     //get exponential map representation for all
     skel.preprocessing1()
+    skel.cleanMemory()
     //split up into batches: batchData is Dense Matrix of totalFrames x BoneVals
     var batchData = preprocessing2()
     //split into minibatches (collect indices into batchData for this)
@@ -132,6 +133,7 @@ class MotionGenerator() {
   
   def gaussiancrbm(batchData : DenseMatrix[Double], nt : Int, numhid : Int) {
     var numbatches = minibatchIndex.length
+    println("NUM BATCHES: " + numbatches)
     //need numdims, have in main numdims = batchData.numCols (==numBoneVals)
     //Learning Rates:
     var epsilonw = 1*pow(10,-3)   //undirected
@@ -175,6 +177,7 @@ class MotionGenerator() {
     var errsum = 0.0
     var mb = DenseVector.zeros[Int](3)
 
+    println("Making List storage...")
     //get matrix Lists set up
     for (i<- 0 until nt){
       A += (DenseMatrix.randn(numdims,numdims)*=0.01)
@@ -186,6 +189,8 @@ class MotionGenerator() {
       Bgrad += DenseMatrix.zeros[Double](numhid,numdims)
       negBgrad += DenseMatrix.zeros[Double](numhid,numdims)
     }
+
+    println("Done initializing")
     
     if (restart == 1){
       restart = 0
@@ -204,58 +209,67 @@ class MotionGenerator() {
       biupdate*=0.0 //
       bjupdate*=0.0 //
       for (i<- 0 until nt){
-        A(i) = DenseMatrix.randn(numdims,numdims)*0.01
+        A(i) := DenseMatrix.randn(numdims,numdims)*=0.01
         Aupdate(i)*=0.0
         Agrad(i)*=0.0
         negAgrad(i)*=0.0
-        B(i) = DenseMatrix.randn(numhid,numdims)*0.01
+        B(i) := DenseMatrix.randn(numhid,numdims)*=0.01
         Bupdate(i)*=0.0
         Bgrad(i)*=0.0
         negBgrad(i)*=0.0
       }
       
     }//be sure updates leave here with 0 values
-    
+
     //MAIN//
     //Loop across Epochs
     for (epoch<-epoch until numepochs){
       errsum = 0.0
       //Loop Across Batches
-      for (batch <- 1 until numbatches){
+      for (batch <- 0 until numbatches){
         ///POSITIVE PHASE///
         numcases = minibatchIndex(batch).length //length of Vector at current batch location (frames)
         mb = minibatchIndex(batch).asCol          //contains indices of current batch
         //data is current and delay data (First Batch current frame + previous nt frames)
         data.clear()
+        bistar = DenseMatrix.zeros[Double](numdims, numcases)
+        bjstar = DenseMatrix.zeros[Double](numhid,numcases)
+        println("Setting data...")
         tempMatrix = DenseMatrix.zeros[Double](numcases,numdims)
         //get matrix Lists set up
-        for (i<- 0 until nt){
+        for (i<- 0 until nt+1 ){
           data += DenseMatrix.zeros[Double](numcases,numdims)   //data(numcases,numdims)
         }
         for (i<- 0 until numcases){
            tempMatrix(i,::) := batchData(mb(i).toInt,::)
         }
         //set first data vals
-        data(0) = tempMatrix
+        data(0) := tempMatrix
         for (hh<- 1 until nt){
           for (i<- 0 until numcases){
-            tempMatrix(i,::) := batchData(mb(i-hh).toInt, ::)
+            tempMatrix(i,::) := batchData(mb(i).toInt-hh, ::)
           }
-          data(hh) = tempMatrix
+          data(hh) := tempMatrix
         }
+        println("rows and cols: " + data(0).numRows + " , " + data(0).numCols)
 
         //Calculate autoregressive connection contributions
-        bistar = DenseMatrix.zeros[Double](numdims, numcases)              //bistar(numdims,numcases)
+        bistar *= 0.0 //DenseMatrix.zeros[Double](numdims, numcases)              //bistar(numdims,numcases)
         //Calculate visible to hidden contributions
-        bjstar = DenseMatrix.zeros[Double](numhid, numcases)               //bjstar(numhid,numcases)
+        bjstar *= 0.0 // DenseMatrix.zeros[Double](numhid, numcases)               //bjstar(numhid,numcases)
+        //println("WHATCHATTA: " + A(0).numRows + "," + A(0).numCols + "   " + data(0).t.numRows + "," + data(0).t.numCols)
+        //println("heheheh: " + bistar.numRows + " , " + bistar.numCols)
         for (hh<- 0 until nt){
-          bistar = bistar + A(hh) * data(hh+1).t
-          bjstar = bjstar + B(hh) * data(hh+1).t
+          bistar := bistar += (A(hh) * (data(hh+1).t))
+          bjstar := bjstar += (B(hh) * (data(hh+1).t))
         }
+        //println("bistar: " + bistar.numRows + " , " + bistar.numCols)
+        //println("bjstar: " + bjstar.numRows + " , " + bjstar.numCols)
 
         //Calculate posterior probability (chance of hidden being on)
         tempMatrix = repmat(numcases, bj, 1)
-        eta = w*((data(0) / gsd).t) + tempMatrix + bjstar                   //eta(numhid,numcases)
+        eta = w*((data(0) /= gsd).t) += tempMatrix += bjstar                   //eta(numhid,numcases)
+        //println("eta: " + eta.numRows + " , " + eta.numCols)
         /*var hposteriors = DenseMatrix.zeros[Double](numhid,numcases)
         for (i<-0 until numhid){
           for (j<-0 until numcases){
@@ -264,6 +278,7 @@ class MotionGenerator() {
         }*/
         //can make better? exp() probably not overloaded for matrices...
         hposteriors = (exp(-eta)+=1):^=(-1)//.foreachValue{case f=>1/f}  //Does this really work?
+        //println("hposteriors: " + hposteriors.numRows + " , " + hposteriors.numCols)
 
         //Activate Hidden Units
         hidstates = DenseMatrix.zeros[Double](numcases,numhid)
@@ -276,42 +291,54 @@ class MotionGenerator() {
               tempMatrix(i,j)
             }
           }
-        }      //hidstates(numcases,numhid)
+        }
+        //println("hidstates: " + hidstates.numRows + " , " + hidstates.numCols)
 
         //Calculate positive Gradients
         //NEED TO STORE THESE UP TOP...KEEP VAL, but don't know size until here
-        wgrad = hidstates.t * (data(0)/gsd)                                      //wgrad(numhid,numdims)
+        wgrad := hidstates.t * (data(0)/=gsd)                                      //wgrad(numhid,numdims)
         tempMatrix = repmat(numcases, bi, 1)
-        bigrad = sum(data(0).t-tempMatrix-bistar, Axis.Vertical).toDense/pow(gsd,2)//bigrad(numdims)
-        bjgrad = sum(hidstates, Axis.Horizontal).t                               //bjgrad(numhid)
+        bigrad := sum(data(0).t-=tempMatrix-=bistar, Axis.Vertical).toDense/=pow(gsd,2)//bigrad(numdims)
+        bjgrad := sum(hidstates, Axis.Horizontal).t                               //bjgrad(numhid)
+        //println("wgrad: " + wgrad.numRows + " , " + wgrad.numCols)
+        //println("bigrad: " + bigrad.length)
+        //println("bjgrad: " + bjgrad.length)
         
         for (hh<- 0 until nt){
-          Agrad(hh) = ((data(0).t-repmat(numcases,bi,1)-bistar) /pow(gsd,2) *data(hh+1)).toDense//Agrad(0)(numdims,numdims)
-          Bgrad(hh) = (hidstates.t * data(hh+1)).toDense                                   //Bgrad(0)(numhid,numdims)
+          Agrad(hh) := (((data(0).t-=repmat(numcases,bi,1)-=bistar)/=pow(gsd,2)) *data(hh+1)).toDense//Agrad(0)(numdims,numdims)
+          Bgrad(hh) := (hidstates.t * data(hh+1)).toDense                                   //Bgrad(0)(numhid,numdims)
         }
         //END POSISTIVE PHASE
+        println("End PositivePhase")
 
         //Activate the Visibles
         //Find mean of Gaussian
         // //Add in gsd.*randn(numcases, numdims) for real sampling
-        tempMatrix = ((hidstates*w)*=gsd) + repmat(numcases, bi.t,0) + bistar.t  //negdata(numcases,numdims)
+        tempMatrix = ((hidstates*w)*=gsd) += repmat(numcases, bi.t,0) += bistar.t  //negdata(numcases,numdims)
         
         //Conditional on negdata calculate posterior for hidden
-        eta = w  * (tempMatrix/gsd).t + repmat(numcases, bj, 1)                    //eta(numhid,numcases)
+        eta = w  * (tempMatrix/=gsd).t += repmat(numcases, bj, 1)                    //eta(numhid,numcases)
         hposteriors = (exp(-eta)+=1):^=(-1)//.foreachValue{case f=>1/f}                         //hposteriors(numhid,numcases)
-        
+
+        println("Finding Negative Gradient")
+
         //Calculate negative gradients
-        negwgrad = hposteriors*(tempMatrix/gsd)                                    //negwgrad(numhid,numdims)
-        negbigrad = sum(tempMatrix.t-repmat(numcases,bi,1)-bistar,Axis.Vertical).toDense/pow(gsd,2)//negbigrad(numdims)
-        negbjgrad = sum(hposteriors, Axis.Vertical)                             //negbjgrad(numhid)
+        negwgrad := hposteriors*(tempMatrix/=gsd)                                    //negwgrad(numhid,numdims)
+        negbigrad := sum(tempMatrix.t-=repmat(numcases,bi,1)-=bistar,Axis.Vertical).toDense/=pow(gsd,2)//negbigrad(numdims)
+        negbjgrad := sum(hposteriors, Axis.Vertical)  //negbjgrad(numhid)
+        //println("negwgrad: " + negwgrad.numRows + " , " + negwgrad.numCols)
+        //println("negbigrad: " + negbigrad.length)
+        //println("negbjgrad: " + negbjgrad.length)
         
         for (hh<- 0  until nt){
-          negAgrad += (tempMatrix.t-repmat(numcases,bi,1)-bistar)/pow(gsd,2) *data(hh+1)//negAgrad(numdims,numdims)
-          negBgrad += (hposteriors*data(hh+1))                                  //negBgrad(numhid,numdims)
+          negAgrad(hh) := ((tempMatrix.t-=repmat(numcases,bi,1)-=bistar)/=pow(gsd,2)) *data(hh+1)//negAgrad(numdims,numdims)
+          negBgrad(hh) := (hposteriors*data(hh+1))                                  //negBgrad(numhid,numdims)
         }
+        //println("negAgrad: " + negAgrad(0).numRows + " , " + negAgrad(0).numCols)
+        //println("negBgrad: " + negBgrad(0).numRows + " , " + negBgrad(0).numCols)
         
         //END NEGATIVE PHASE
-        errsum += (((data(0)-tempMatrix):^=2).sum)
+        errsum += (((data(0)-=tempMatrix):^=2).sum)
         
         //check momentum
         if (epoch > 5){
@@ -321,24 +348,27 @@ class MotionGenerator() {
         }
         
         //UPDATE WEIGHTS   (and biases)
-        wupdate = (wupdate*=momentum) :+= (((wgrad-negwgrad)/=numcases :-= w*=wdecay)*=epsilonw)//wupdate(numhid,numdims)
-        biupdate = (biupdate*=momentum) :+= ((bigrad-negbigrad)*=(epsilonbi/numcases)) //biupdate(numdims)
-        bjupdate = (bjupdate*=momentum) :+= ((bjgrad-negbjgrad)*=(epsilonbj/numcases)) //bjupdate(numhid)
+        wupdate := (wupdate*=momentum) :+= (((wgrad-=negwgrad)/=numcases :-= w*=wdecay)*=epsilonw)//wupdate(numhid,numdims)
+        biupdate := (biupdate*=momentum) :+= ((bigrad-=negbigrad)*=(epsilonbi/numcases)) //biupdate(numdims)
+        bjupdate := (bjupdate*=momentum) :+= ((bjgrad-=negbjgrad)*=(epsilonbj/numcases)) //bjupdate(numhid)
+        //println("wupdate: " + wupdate.numRows + " , " + wupdate.numCols)
         
         for (hh<- 0 until nt){
-          Aupdate(hh) = (Aupdate(hh)*=momentum) + (((Agrad(hh)-negAgrad(hh))/=numcases :-= (A(hh)*=wdecay))*=epsilonA)//Aupdate(numdims,numdims)
-          Bupdate(hh) = (Bupdate(hh)*=momentum) + (((Bgrad(hh)-negBgrad(hh))/=numcases :-= (B(hh)*=wdecay))*=epsilonB)//Bupdate(numhid,numdims)
+          Aupdate(hh) := (Aupdate(hh)*=momentum) += (((Agrad(hh)-=negAgrad(hh))/=numcases :-= (A(hh)*=wdecay))*=epsilonA)//Aupdate(numdims,numdims)
+          Bupdate(hh) := (Bupdate(hh)*=momentum) += (((Bgrad(hh)-=negBgrad(hh))/=numcases :-= (B(hh)*=wdecay))*=epsilonB)//Bupdate(numhid,numdims)
         }
-        w = w + wupdate
-        bi = bi + biupdate
-        bj = bj + bjupdate
+        w := w + wupdate
+        bi := bi += biupdate
+        bj := bj += bjupdate
+
+        println("MADE IT TO UPDATES")
         
         for (hh<- 0 until nt){
-          A(hh) = A(hh) + Aupdate(hh)
-          B(hh) = B(hh) + Bupdate(hh)
+          A(hh) := A(hh) += Aupdate(hh)
+          B(hh) := B(hh) += Bupdate(hh)
         }
         //END OF UPDATES
-        
+        println("End batch: " + batch)
       }//end batches
       
       //print every 10 epochs

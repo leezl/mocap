@@ -269,7 +269,7 @@ class Skeleton {
           if(lin(0)!= 1){//append motion
             tempFrames.frames = currentAction :: tempFrames.frames ///
           }
-          if (lin(0).toInt >= 120){
+          if (lin(0).toInt >= 150){ ///////////////////////////LIMIT file size
             stop=1
           }
           currentAction.frameID = lin(0).toInt
@@ -392,7 +392,7 @@ class Skeleton {
       var mh = 0.0
       var apos = 0.0
       for(j<- 0 until Motions(i).frames.length){
-        if(j<Motions(i).frames.length-1){ //not last frame
+        if(j < Motions(i).frames.length-1){ //not last frame
           mydiff *=0.0
           mydiff(0) = Motions(i).frames(j+1).newRep(2) - Motions(i).frames(j).newRep(2)
           tempRootPos = lookUpAction(i, j+1, "root").asCol
@@ -670,6 +670,15 @@ class Skeleton {
         //Motions(motion).frames(frame).action.foreach{case (key, value) => println(key)}
         DenseVector.zeros[Double](3)
         //sys.exit()
+    }
+  }
+
+  def cleanMemory(){
+    for(i <- 0 until Motions.length){
+      for(j <- 0 until Motions(i).frames.length){
+        Motions(i).frames(j).action.clear()
+        Motions(i).frames(j).fixedAction.clear()
+      }
     }
   }
 

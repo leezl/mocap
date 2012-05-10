@@ -18,9 +18,10 @@ object GeneratorMain {
     var generator = new MotionGenerator()
     var skeletonFile = "data/02"
     var motionFiles = List[String]()
-    for (i<- 1 until  2){
-      motionFiles = "data/02_0" + i.toString + ".amc" ::motionFiles
-    }
+    motionFiles = "data/02_01" + ".amc" ::motionFiles
+    //for (i<- 1 until  2){
+      //motionFiles = "data/02_0" + i.toString + ".amc" ::motionFiles
+    //}
     println("Done Loading.")
     generator.init(skeletonFile, motionFiles)
     
