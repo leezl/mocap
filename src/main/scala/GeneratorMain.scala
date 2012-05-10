@@ -1,4 +1,5 @@
 package main.scala
+import scala.collection.mutable._
 
 /**
  * Created by IntelliJ IDEA.
@@ -11,10 +12,19 @@ package main.scala
  */
 
 object GeneratorMain {
-  val skel = new Skeleton
 
   def main(args: Array[String]) {
-
+    //make MotionGenerator (pass files)
+    var generator = new MotionGenerator()
+    var skeletonFile = "data/02"
+    var motionFiles = List[String]()
+    for (i<- 1 until  2){
+      motionFiles = "data/02_0" + i.toString + ".amc" ::motionFiles
+    }
+    println("Done Loading.")
+    generator.init(skeletonFile, motionFiles)
+    
+    println("Made it to end...?")
   }
 
 }

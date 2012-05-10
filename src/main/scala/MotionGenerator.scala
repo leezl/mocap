@@ -1,10 +1,11 @@
 package main.scala
 
 import util.Random
+import util.Random._
+import java.util.Collections
 import scalala.tensor.dense._
-import scalala.tensor.dense.CommonDenseVectorConstructors._
-import collection.generic.GenericCompanion._
-import scala.MathCommon._
+import scalala.tensor.dense.DenseVector._
+import scalala.tensor.dense.DenseMatrix._
 import scala.collection.mutable._
 import scalala.scalar._
 import scalala.tensor.::
@@ -37,15 +38,26 @@ class MotionGenerator() {
   var minibatchsize = 0 //?
   var numdims = 0
   var numcases = 0
-  var batchIndex = MutableList[Double]()
+  var batchIndex = MutableList[Int]()
   //contains List of DenseVectors (batches of indexes into batchData)
-  var minibatchIndex = MutableList[DenseVector]()
+  var minibatchIndex = MutableList[DenseVector[Int]]()
   //var batchData = DenseMatrix.zeros[Double](3,3) //created in init, passed to all
   //Default network properties:
   var numhid1 = 150
   var numhid2 = 150
   var numepochs = 2000
   var gsd = 1   //gaussian std dev
+  var w = DenseMatrix.zeros[Double](3,3) //is this legal
+  var bi = DenseVector.zeros[Double](3)
+  var bj = DenseVector.zeros[Double](3)
+  var A = MutableList[DenseMatrix[Double]]()
+  var B = MutableList[DenseMatrix[Double]]()
+  //second Layer
+  var w2 = DenseMatrix.zeros[Double](3,3) //is this legal
+  var bi2 = DenseVector.zeros[Double](3)
+  var bj2 = DenseVector.zeros[Double](3)
+  var A2 = MutableList[DenseMatrix[Double]]()
+  var B2 = MutableList[DenseMatrix[Double]]()
   //var nt = n1, n2, etc //crbm order how far forward and back (3 default)
   //var numhid = numhid1, numhid2, etc
   var restart = 1
@@ -61,10 +73,10 @@ class MotionGenerator() {
   val skel = new Skeleton
 
   def init(skeletonFile : String,  motionFiles : List[String]){
-    skel.loadSkeleton(skeletonFile)//check these
-    motionFiles.foreach(file => skel.loadMotion)//check these
+    skel.loadSkeleton(skeletonFile,"asf")//check these
+    motionFiles.foreach(file => skel.loadMotion(file))//check these
     //Downsample/ preprocess (Put these together? why didn't they?)
-    skel.downsampling(4)
+    //skel.downsampling(4)
     //get exponential map representation for all
     skel.preprocessing1()
     //split up into batches: batchData is Dense Matrix of totalFrames x BoneVals
@@ -80,51 +92,96 @@ class MotionGenerator() {
     //try running
     println("Training Layer 1 CRBM, order " + n1 + " :" + numdims + " - " + numhid1)
     gaussiancrbm(batchData, n1, numhid1)
+
+    //plot weights figure YAY SCALALA HAS PLOTTING
+    weightreport(n1)
+
+    //binarycrbm(batchData, n2, numhid2)
+
+  }
+
+  def weightreport(nt : Int){
+    plot.hold = true
+    subplot(3, nt, 1)
+    hist(DenseVector[Double](w.data),50)
+    title("w max: " + w.max + " min: " + w.min)
+
+    subplot(3, nt, 2)
+    hist(bi,50)
+    title("bi max: " + bi.max + " min: " + bi.min)
+
+    subplot(3, nt, 3)
+    hist(bj,50)
+    title("bj max: " + bj.max + " min: " + bj.min)
+
+    for (i<-0 until nt){
+      subplot(3, nt, nt+i)
+      hist(DenseVector[Double](A(i).data),50)
+      title("A(" + i + ") max: " + A(i).max + " min: " + A(i).min)
+    }
+
+    for (i<-0 until nt){
+      subplot(3, nt, nt+i)
+      hist(DenseVector[Double](B(i).data),50)
+      title("B(" + i + ") max: " + B(i).max + " min: " + B(i).min)
+    }
+    
+    saveas("n1Plot.png")
+
   }
   
-  def gaussiancrbm(batchData : DenseMatrix[Double], nt : Int, humhid : Int) {
+  def gaussiancrbm(batchData : DenseMatrix[Double], nt : Int, numhid : Int) {
     var numbatches = minibatchIndex.length
     //need numdims, have in main numdims = batchData.numCols (==numBoneVals)
     //Learning Rates:
-    var epsilonw = 1*10^-3   //undirected
-    var epsilonbi = 1*10^-3  //visibles
-    var epsilonbj = 1*10^-3  //hidden units
-    var epsilonA = 1*10^-3   //autoregressive
-    var epsilonB = 1*10^-3   //prev visibles to hidden
+    var epsilonw = 1*pow(10,-3)   //undirected
+    var epsilonbi = 1*pow(10,-3)  //visibles
+    var epsilonbj = 1*pow(10,-3)  //hidden units
+    var epsilonA = 1*pow(10,-3)   //autoregressive
+    var epsilonB = 1*pow(10,-3)   //prev visibles to hidden
     var wgrad = DenseMatrix.zeros[Double](numhid,numdims) //make a default for now
     var negwgrad = DenseMatrix.zeros[Double](numhid,numdims)
     var negbigrad = DenseVector.zeros[Double](numdims)
     var negbjgrad = DenseVector.zeros[Double](numhid)
-    var w : DenseMatrix[Double] = 0.01*randn(numhid, numdims)                  //w(numhid,numdims)
-    var bi = 0.01*DenseVector.randn(numdims)
-    var bj = -1+0.01*DenseVector.randn(numhid)  //favor OFF units
+    w = (DenseMatrix.randn(numhid, numdims)*=0.01)                  //w(numhid,numdims)
+    bi = (DenseVector.randn(numdims)*=0.01)
+    bj = ((DenseVector.randn(numhid)*=0.01)+=(-1))  //favor OFF units
     var bigrad = DenseVector.zeros[Double](numdims)
     var bjgrad = DenseVector.zeros[Double](numhid)
     //autoregressive weights: A(:,:,j) weight from t-j to visible
-    var A = MutableList[DenseMatrix[Double]]()
     var Aupdate = MutableList[DenseMatrix[Double]]()
     var Agrad = MutableList[DenseMatrix[Double]]()
     var negAgrad = MutableList[DenseMatrix[Double]]()
     //weights from previous timesteps to hiddens: B(:,:,j) is weight from t-j to hidden layer
-    var B = MutableList[DenseMatrix[Double]]()
     var Bupdate = MutableList[DenseMatrix[Double]]()
     var Bgrad = MutableList[DenseMatrix[Double]]()
     var negBgrad = MutableList[DenseMatrix[Double]]()
+    var data = MutableList[DenseMatrix[Double]]()
     ///
     var wupdate = DenseMatrix.zeros[Double](numhid, numdims)//.zero //
     var biupdate = DenseVector.zeros[Double](numdims)//.zero //
     var bjupdate = DenseVector.zeros[Double](numhid)//.zero //
+    var tempMatrix = DenseMatrix.zeros[Double](3,3)
+    var bistar = DenseMatrix.zeros[Double](3,3)
+    var bjstar = DenseMatrix.zeros[Double](3,3)
+    var eta = DenseMatrix.zeros[Double](3,3)
+    var hposteriors = DenseMatrix.zeros[Double](3,3)
+    var hidstates = DenseMatrix.zeros[Double](3,3)
 
     var wdecay = 0.0002  //same decay for all..
     var mom = 0.9        //momentum
+    var epoch = 1
+    var momentum = 0.0
+    var errsum = 0.0
+    var mb = DenseVector.zeros[Int](3)
 
     //get matrix Lists set up
     for (i<- 0 until nt){
-      A += 0.01*DenseMatrix.randn(numdims,numdims)
+      A += (DenseMatrix.randn(numdims,numdims)*=0.01)
       Aupdate += DenseMatrix.zeros[Double](numdims,numdims)
       Agrad += DenseMatrix.zeros[Double](numdims,numdims)
       negAgrad += DenseMatrix.zeros[Double](numdims,numdims)
-      B += 0.01*DenseMatrix.randn(numhid,numdims)
+      B += (DenseMatrix.randn(numhid,numdims)*=0.01)
       Bupdate += DenseMatrix.zeros[Double](numhid,numdims)
       Bgrad += DenseMatrix.zeros[Double](numhid,numdims)
       negBgrad += DenseMatrix.zeros[Double](numhid,numdims)
@@ -136,25 +193,25 @@ class MotionGenerator() {
 
       //Initialize Weights
       //empty all:
-      wgrad.zero
-      bigrad.zero
-      bjgrad.zero
-      negwgrad.zero
-      negbigrad.zero
-      negbjgrad.zero
+      wgrad*=0.0
+      bigrad*=0.0
+      bjgrad*=0.0
+      negwgrad*=0.0
+      negbigrad*=0.0
+      negbjgrad*=0.0
       //Keep previous updates for momentum?
-      wupdate.zero //
-      biupdate.zero //
-      bjupdate.zero //
+      wupdate*=0.0 //
+      biupdate*=0.0 //
+      bjupdate*=0.0 //
       for (i<- 0 until nt){
-        A(i)= 0.01*DenseMatrix.randn(numdims,numdims)
-        Aupdate(i).zero
-        Agrad(i).zero
-        negAgrad(i).zero
-        B(i) = 0.01*DenseMatrix.randn(numhid,numdims)
-        Bupdate(i).zero
-        Bgrad(i).zero
-        negBgrad(i).zero
+        A(i) = DenseMatrix.randn(numdims,numdims)*0.01
+        Aupdate(i)*=0.0
+        Agrad(i)*=0.0
+        negAgrad(i)*=0.0
+        B(i) = DenseMatrix.randn(numhid,numdims)*0.01
+        Bupdate(i)*=0.0
+        Bgrad(i)*=0.0
+        negBgrad(i)*=0.0
       }
       
     }//be sure updates leave here with 0 values
@@ -162,35 +219,35 @@ class MotionGenerator() {
     //MAIN//
     //Loop across Epochs
     for (epoch<-epoch until numepochs){
-      var errsum=0
+      errsum = 0.0
       //Loop Across Batches
       for (batch <- 1 until numbatches){
         ///POSITIVE PHASE///
         numcases = minibatchIndex(batch).length //length of Vector at current batch location (frames)
-        var mb = miniBatchIndex(batch)          //contains indices of current batch
+        mb = minibatchIndex(batch).asCol          //contains indices of current batch
         //data is current and delay data (First Batch current frame + previous nt frames)
-        var data = MutableList[DenseMatrix[Double]]()
-        var tempMatrix = DenseMatrix.zeros[Double](numcases,numdims)
+        data.clear()
+        tempMatrix = DenseMatrix.zeros[Double](numcases,numdims)
         //get matrix Lists set up
         for (i<- 0 until nt){
           data += DenseMatrix.zeros[Double](numcases,numdims)   //data(numcases,numdims)
         }
         for (i<- 0 until numcases){
-           tempMatrix(i, ::) = batchData(minibatchIndex(i), ::)
+           tempMatrix(i,::) := batchData(mb(i).toInt,::)
         }
         //set first data vals
         data(0) = tempMatrix
         for (hh<- 1 until nt){
           for (i<- 0 until numcases){
-            tempMatrix(i, ::) = batchData(minibatchIndex(i-hh), ::)
+            tempMatrix(i,::) := batchData(mb(i-hh).toInt, ::)
           }
           data(hh) = tempMatrix
         }
 
         //Calculate autoregressive connection contributions
-        var bistar = DenseMatrix.zeros[Double](numdims, numcases)              //bistar(numdims,numcases)
+        bistar = DenseMatrix.zeros[Double](numdims, numcases)              //bistar(numdims,numcases)
         //Calculate visible to hidden contributions
-        var bjstar = DenseMatrix.zeros[Double](numhid, numcases)               //bjstar(numhid,numcases)
+        bjstar = DenseMatrix.zeros[Double](numhid, numcases)               //bjstar(numhid,numcases)
         for (hh<- 0 until nt){
           bistar = bistar + A(hh) * data(hh+1).t
           bjstar = bjstar + B(hh) * data(hh+1).t
@@ -198,7 +255,7 @@ class MotionGenerator() {
 
         //Calculate posterior probability (chance of hidden being on)
         tempMatrix = repmat(numcases, bj, 1)
-        var eta = w*((data(0) / gsd).t) + tempMatrix + bjstar                   //eta(numhid,numcases)
+        eta = w*((data(0) / gsd).t) + tempMatrix + bjstar                   //eta(numhid,numcases)
         /*var hposteriors = DenseMatrix.zeros[Double](numhid,numcases)
         for (i<-0 until numhid){
           for (j<-0 until numcases){
@@ -206,64 +263,71 @@ class MotionGenerator() {
           }
         }*/
         //can make better? exp() probably not overloaded for matrices...
-        var hposteriors = 1/(1+exp(-eta))  //Does this really work?
+        hposteriors = (exp(-eta)+=1):^=(-1)//.foreachValue{case f=>1/f}  //Does this really work?
 
         //Activate Hidden Units
-        var hidstates = (hposteriors.t > DenseMatrix.rand(numcases,numhid))      //hidstates(numcases,numhid)
+        hidstates = DenseMatrix.zeros[Double](numcases,numhid)
+        tempMatrix = DenseMatrix.rand(numcases,numhid)
+        for (i<- 0 until  numcases){
+          for (j<- 0  until numhid){
+            if((hposteriors.t)(i,j) > tempMatrix(i,j)){
+              hidstates(i,j) = (hposteriors.t)(i,j)
+            } else{
+              tempMatrix(i,j)
+            }
+          }
+        }      //hidstates(numcases,numhid)
 
         //Calculate positive Gradients
         //NEED TO STORE THESE UP TOP...KEEP VAL, but don't know size until here
         wgrad = hidstates.t * (data(0)/gsd)                                      //wgrad(numhid,numdims)
         tempMatrix = repmat(numcases, bi, 1)
-        bigrad = sum(data(0).t - tempMatrix - bistar, Axis.Vertical) / pow(gsd,2)//bigrad(numdims)
+        bigrad = sum(data(0).t-tempMatrix-bistar, Axis.Vertical).toDense/pow(gsd,2)//bigrad(numdims)
         bjgrad = sum(hidstates, Axis.Horizontal).t                               //bjgrad(numhid)
         
         for (hh<- 0 until nt){
-          Agrad(hh) = (data(0).t-repmat(numcases,bi,1)-bistar) /pow(gsd,2) *data(hh+1)//Agrad(0)(numdims,numdims)
-          Bgrad(hh) = hidstates.t * data(hh+1)                                   //Bgrad(0)(numhid,numdims)
+          Agrad(hh) = ((data(0).t-repmat(numcases,bi,1)-bistar) /pow(gsd,2) *data(hh+1)).toDense//Agrad(0)(numdims,numdims)
+          Bgrad(hh) = (hidstates.t * data(hh+1)).toDense                                   //Bgrad(0)(numhid,numdims)
         }
         //END POSISTIVE PHASE
 
         //Activate the Visibles
-        //Find mean of Gaussian                                                 //topdown(numcases,numdims)
-        var topdown = gsd * (hidstates*w)
+        //Find mean of Gaussian
         // //Add in gsd.*randn(numcases, numdims) for real sampling
-        negdata = topdown + repmat(numcases, bi.t,0) + bistar.t                 //negdata(numcases,numdims)
+        tempMatrix = ((hidstates*w)*=gsd) + repmat(numcases, bi.t,0) + bistar.t  //negdata(numcases,numdims)
         
         //Conditional on negdata calculate posterior for hidden
-        eta = w  * (negdata/gsd).t + repmat(numcases, bj, 1)                    //eta(numhid,numcases)
-        hposteriors = 1/(1 + exp(-eta))                                         //hposteriors(numhid,numcases)
+        eta = w  * (tempMatrix/gsd).t + repmat(numcases, bj, 1)                    //eta(numhid,numcases)
+        hposteriors = (exp(-eta)+=1):^=(-1)//.foreachValue{case f=>1/f}                         //hposteriors(numhid,numcases)
         
         //Calculate negative gradients
-        negwgrad = hposteriors*(negdata/gsd)                                    //negwgrad(numhid,numdims)
-        negbigrad = sum(negdata.t-repmat(numcases,bi,1)-bistar,Axis.Vertical)/pow(gsd,2)//negbigrad(numdims)
+        negwgrad = hposteriors*(tempMatrix/gsd)                                    //negwgrad(numhid,numdims)
+        negbigrad = sum(tempMatrix.t-repmat(numcases,bi,1)-bistar,Axis.Vertical).toDense/pow(gsd,2)//negbigrad(numdims)
         negbjgrad = sum(hposteriors, Axis.Vertical)                             //negbjgrad(numhid)
         
         for (hh<- 0  until nt){
-          negAgrad += (negdata.t-repmat(numcases,bi,1)-bistar)/pow(gsd,2) *data(hh+1)//negAgrad(numdims,numdims)
+          negAgrad += (tempMatrix.t-repmat(numcases,bi,1)-bistar)/pow(gsd,2) *data(hh+1)//negAgrad(numdims,numdims)
           negBgrad += (hposteriors*data(hh+1))                                  //negBgrad(numhid,numdims)
         }
         
         //END NEGATIVE PHASE
-        
-        err = (pow(data(0)-negdata, 2)).sum //single sum of all matrix elements
-        errsum += err
+        errsum += (((data(0)-tempMatrix):^=2).sum)
         
         //check momentum
         if (epoch > 5){
-          momentum =mom
+          momentum = mom
         } else{
           momentum=0
         }
         
         //UPDATE WEIGHTS   (and biases)
-        wupdate = momentum*wupdate + epsilonw*((wgrad-negwgrad)/numcases - wdecay*w)//wupdate(numhid,numdims)
-        biupdate = momentum*biupdate + (epsilonbi/numcases)*(bigrad-negbigrad) //biupdate(numdims)
-        bjupdate = momentum*bjupdate + (epsilonbj/numcases)*(bjgrad-negbjgrad) //bjupdate(numhid)
+        wupdate = (wupdate*=momentum) :+= (((wgrad-negwgrad)/=numcases :-= w*=wdecay)*=epsilonw)//wupdate(numhid,numdims)
+        biupdate = (biupdate*=momentum) :+= ((bigrad-negbigrad)*=(epsilonbi/numcases)) //biupdate(numdims)
+        bjupdate = (bjupdate*=momentum) :+= ((bjgrad-negbjgrad)*=(epsilonbj/numcases)) //bjupdate(numhid)
         
         for (hh<- 0 until nt){
-          Aupdate(hh) = momentum*Aupdate(hh) + epsilonA*((Agrad(hh)-negAgrad(hh))/numcases - wdecay*A(hh))//Aupdate(numdims,numdims)
-          Bupdate(hh) = momentum*Bupdate(hh) + epsilonB*((Bgrad(hh)-negBgrad(hh))/numcases - wdecay*B(hh))//Bupdate(numhid,numdims)
+          Aupdate(hh) = (Aupdate(hh)*=momentum) + (((Agrad(hh)-negAgrad(hh))/=numcases :-= (A(hh)*=wdecay))*=epsilonA)//Aupdate(numdims,numdims)
+          Bupdate(hh) = (Bupdate(hh)*=momentum) + (((Bgrad(hh)-negBgrad(hh))/=numcases :-= (B(hh)*=wdecay))*=epsilonB)//Bupdate(numhid,numdims)
         }
         w = w + wupdate
         bi = bi + biupdate
@@ -287,18 +351,20 @@ class MotionGenerator() {
   }
   
   //Creates matrix out of repeating vector, dim is row(0) vs col(other) repeat 
-  def repmat(matSize : Int, vector : DenseVector[Double], dim : Boolean) : DenseMatrix[Double] = {
+  def repmat(matSize : Int, vector : DenseVector[Double], dim : Int) : DenseMatrix[Double] = {
+    var matrix = DenseMatrix.zeros[Double](3,3)
     if (dim==0){
-      var matrix = DenseMatrix.zeros[Double](matSize, vector.length)
+      matrix = DenseMatrix.zeros[Double](matSize, vector.length)
       for (i<-0 until matSize){
-        matrix(i, ::) = vector.t //assume bj is column vector
+        matrix(i, ::) := vector //assume bj is column vector
       }
     } else {
-      var matrix = DenseMatrix.zeros[Double](vector.length, matSize)
+      matrix = DenseMatrix.zeros[Double](vector.length, matSize)
       for (i<-0 until matSize){
-        matrix(::, i) = vector
+        matrix(::, i) := vector
       }
     }
+    matrix//return matrix
   }
 
   //
@@ -312,6 +378,7 @@ class MotionGenerator() {
         totalFrames += 1
         if (dim != skel.Motions(i).frames(j).actionVector.length){
           println("Dimensions not the same across vectors..." + skel.Motions(i).frames(j).actionVector.length + " vs. " + dim)
+          sys.exit()
         } else{
 
         }
@@ -326,10 +393,11 @@ class MotionGenerator() {
       }
     }
     //numcases is num frames (batchData.rows)
-    var dataMean = DenseVector[Double](dim)
-    var dataStd = DenseVector[Double](dim)
+    var dataMean = DenseVector.zeros[Double](dim)
+    var dataStd = DenseVector.zeros[Double](dim)
     for (i<- 0 until dim){
       //dataMean is vector of means of each bone across all frames (mean for each column)
+      //println("i: " + i + " rows,cols: " + batchData.numRows + " , " + batchData.numCols + "mean? " + dataMean.length + " dim " + dim)
       dataMean(i) = avg_short(batchData(::, i))
       //dataStd is standard deviation of bone values (std dev fro each col)
       dataStd(i) = stdDev(batchData(::, i))
@@ -347,6 +415,31 @@ class MotionGenerator() {
     //batchData //return
   }
 
+  def stdDev(numbers : DenseVector[Double]) : Double = {
+    val sum : Double =
+      if(numbers.length>=2){
+        val mean = avg_short(numbers)
+        val factor:Double = 1.0/(numbers.length.toDouble-1);
+        factor * numbers.toList.foldLeft(0.0)((acc,x) =>acc+math.pow(x-mean,2))//shouldn't need toList
+      } else {
+        0.0
+      }
+    math.sqrt(sum);
+  }
+
+  def avg_short(numbers : DenseVector[Double]) : Double = numbers.toList.reduceLeft(_ + _) / numbers.length.toDouble
+
+  def squaredDifference(value1: Double, value2: Double) : Double = {math.pow(value1-value2, 2.0)}
+
+  def stdDev(list: DenseVector[Double], average: Double) = {
+    list.toList.isEmpty match {
+      case false =>
+        val squared = list.toList.foldLeft(0.0)(_ + squaredDifference(_, avg_short(list)))
+        math.sqrt(squared / list.length.toDouble)
+      case true => 0.0
+    }
+  }
+
   def preprocessing3(){
     //collect indices for minibatches (split data up)
     var seqlength = 0
@@ -356,8 +449,8 @@ class MotionGenerator() {
       }
       seqlength += skel.Motions(i).frames.length //add up total number frames so far
     }
-    var permindex = shuffle(batchIndex)
-    var numfullbatches = floor(permindex.length/batchsize)
+    var permindex = DenseVector(shuffle(batchIndex.toList).toArray)
+    var numfullbatches= scala.math.floor(permindex.length/batchsize).toInt
     var j = 0
     while (j < batchsize*(numfullbatches-numvalidatebatches)){
       minibatchIndex += permindex(j to j+batchsize-1)
@@ -369,7 +462,7 @@ class MotionGenerator() {
       j += batchsize
     }
     //Add leftover Frames to end of minibatchIndex (do we need this?)
-    miniBatchIndex += permindex(j to permindex.size-1)
+    minibatchIndex += permindex(j to permindex.size-1)
   }
 
 }
