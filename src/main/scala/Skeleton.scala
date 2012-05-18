@@ -269,7 +269,7 @@ class Skeleton {
           if(lin(0)!= 1){//append motion
             tempFrames.frames = currentAction :: tempFrames.frames ///
           }
-          if (lin(0).toInt >= 150){ ///////////////////////////LIMIT file size
+          if (lin(0).toInt >= 100){ ///////////////////////////LIMIT file size
             stop=1
           }
           currentAction.frameID = lin(0).toInt
