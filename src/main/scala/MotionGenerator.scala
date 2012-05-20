@@ -77,6 +77,8 @@ class MotionGenerator() {
   var restart = 1
   var filteringdist =0.0
   var initData = DenseMatrix.zeros[Double](3,3)
+  var dataMean = DenseVector.zeros[Double](dim)
+  var dataStd = DenseVector.zeros[Double](dim)
   //Randoms: need uniform and gaussian random weights for matrices in crbms;
   //  may need 2 separate? can't see where they needed uniform dist.
   //  rand.nextDouble, rand.nextGaussian
@@ -129,6 +131,9 @@ class MotionGenerator() {
     println("Done Generating")
 
     //postprocess/save as acm file with channels (mark as skeleton num)
+    var newData = postprocess1()
+
+    postprocess2()
 
     //plot weights
 
@@ -136,6 +141,37 @@ class MotionGenerator() {
 
     //play data/ save data again
 
+  }
+
+  //change back to body centered coordinates
+  def postprocess1() = DenseMatrix[Double]{//CHECK ROW VS COL HERE
+    var newdata  = repmat(visible.numRows,dataStd,0) :* visible + repmat(visible.numRows,dataMean,0)
+
+    //oh no not the unlabeled indexing of doom
+    //newdata = //store newdata back into a skelton's Motions, Frames, etc
+    //newdata 1-3 = root rot
+    //newdata 4-6 = root pos
+    //etc...reverse preprocessing essentially...
+    //check for zeros or ignore?
+
+  }
+
+  //change back to reference coordinate system
+  def postprocess2(){
+    //extract angles...
+    //var phi = root x rot
+    //var theta = root y rot (or is it z in this axis setup?)
+    //var vertrotdelta = root z rot
+    //var groundxdelta = root x pos
+    //var groundzdelta = root y pos
+    //var pos_x = posInd(1)
+    //var pos_y = posInd(2)
+    //var pos_z = posInd(3)
+    //var rot_x = expmapInd(1)
+    //var rot_y = expmapInd(2)
+    //var rot_z = expmapInd(3)
+    //MOVE vertical postion back
+    //newdata(pos_y) = newdata(6)
   }
 
   def gen() : DenseMatrix[Double] = {
@@ -928,8 +964,7 @@ class MotionGenerator() {
       }
     }
     //numcases is num frames (batchData.rows)
-    var dataMean = DenseVector.zeros[Double](dim)
-    var dataStd = DenseVector.zeros[Double](dim)
+
     for (i<- 0 until dim){
       //dataMean is vector of means of each bone across all frames (mean for each column)
       //println("i: " + i + " rows,cols: " + batchData.numRows + " , " + batchData.numCols + "mean? " + dataMean.length + " dim " + dim)
