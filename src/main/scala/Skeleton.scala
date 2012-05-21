@@ -63,6 +63,8 @@ class Skeleton {
   var segmentList = List[String]()
   //list of all actions for this skeleton
   var Motions = List[Frames]()
+  var resultFrames = new Frames
+  var useFixedAction = 0
   //var MotionMatrix = DenseMatrix[Double](1,1) //what sizes? won't know till done loading...
   //list of frames; contains all bones mapped to actions
   var velocity: Double = 0.0
@@ -110,7 +112,7 @@ class Skeleton {
     //action is all moves for all bones, for this frame
     var action = Map[String, List[Double]]()//all channels
     var fixedAction = Map[String, DenseVector[Double]]()
-    //Check that actionVecto is consistent order
+    //Check that actionVector is consistent order
     var actionVector = MutableList[Double]()
     //body-centered representation
     var newRep = DenseVector.zeros[Double](3)/////////////////
@@ -296,24 +298,9 @@ class Skeleton {
     Motions = tempFrames :: Motions
   }
 
-  //downsample (drop extra frames / interpolate)
-  /*def downsampling(rate: Int) {
-    val shortTemp = new Frames
-    //channels.filter()
-    for (j<- 0 until Motions.length){
-      var i=0
-      //store every fourth frame
-      while (i != Motions(j).frames.length){
-        if (i%rate == 0){
-          shortTemp.frames = Motions(j).frames(i) :: shortTemp.frames
-        }
-        i = i + 1
-      }
-      //replace (and fix order)
-      shortTemp.frames.reverse
-      Motions(j).frames = shortTemp.frames
-    }
-  } */
+  def storeResultMotions(){
+
+  }
 
   //downsample (drop extra frames / interpolate)
   def downsampling(rate: Int, frame : Frames) : Frames = {
@@ -345,7 +332,7 @@ class Skeleton {
     val up = DenseVector.zeros[Double](3)
     var rotMatrix = DenseMatrix.zeros[Double](3,3)
     up(1) = 1.0
-    euler2expmap()//runs on skel and all motions (has full access from here)
+    euler2expmap()//runs on skel and all motions (has full access from here)  //DEfines expMapInd? Problem: they never do this, why? In FixedAction and actionVector
     //var root = lookUpBone("root")
     var totalPiChange = 0.0 /////////unwrapping
     var previousFrame = 0.0
@@ -409,8 +396,14 @@ class Skeleton {
           Motions(i).frames(j).grdVel = Motions(i).frames(j-1).grdVel
         }
       }
-      for (j<- 0 until Motions(i).frames.length){//WOW THIS COULD BE WRONG
-        Motions(i).frames(j).action("root") = List(Motions(i).frames(j).newRep(0), Motions(i).frames(j).newRep(1), Motions(i).frames(j).grdVel(2), Motions(i).frames(j).grdVel(0), Motions(i).frames(j).grdVel(1), Motions(i).frames(j).action("root")(2))
+      for (j<- 0 until Motions(i).frames.length){//WOW THIS COULD BE WRONG: Assign NewRep to ROOT of each frame:
+        Motions(i).frames(j).fixedAction("root") = DenseVector(List(Motions(i).frames(j).newRep(0), Motions(i).frames(j).newRep(1), Motions(i).frames(j).grdVel(2), Motions(i).frames(j).grdVel(0), Motions(i).frames(j).grdVel(1), Motions(i).frames(j).fixedAction("root")(2)).toArray)
+        Motions(i).frames(j).actionVector(0) = Motions(i).frames(j).newRep(0)
+        Motions(i).frames(j).actionVector(1) = Motions(i).frames(j).newRep(1)
+        Motions(i).frames(j).actionVector(2) = Motions(i).frames(j).grdVel(2)
+        Motions(i).frames(j).actionVector(3) = Motions(i).frames(j).grdVel(0)
+        Motions(i).frames(j).actionVector(4) = Motions(i).frames(j).grdVel(1)
+        Motions(i).frames(j).actionVector(5) = Motions(i).frames(j).fixedAction("root")(2)
       }
     }
   }
@@ -437,6 +430,7 @@ class Skeleton {
         if(rot.length > 3){
           println("ROT TOO LARGE?")
         }
+        //Motions(i).frames(j).fixedAction("root") = rot
         Motions(i).frames(j).fixedAction("root") = rot
         for (k<-0 until  rot.length){
           Motions(i).frames(j).actionVector += rot(k)
@@ -446,9 +440,30 @@ class Skeleton {
         convertChildren(bone.children, i, j)
       }
     }
+    useFixedAction = 1
 
   }
-  
+
+  def rotmat2euler(rotmat: DenseMatrix[Double]) : DenseVector[Double] = {
+    var E1, E2, E3 = 0.0
+    if (rotmat(0,2)==1 || rotmat(0,2) == -1){
+      E3 = 0
+      dlta = atan2(rotmat(0,1),rotmat(0,2))
+      if (rotmat(0,2)==-1){
+        E2 = Pi/2
+        E1 = E3 + dlta
+      } else {
+        E2 = -Pi/2
+        E1 = -E3 + dlta
+      }
+    } else{
+      E2 = -asin(rotmat(0,2))
+      E1 = atan2(rotmat(1,2)/cos(E2), rotmat(2,2)/cos(E2))
+      E3 = atan2(rotmat(0,1)/cos(E2), rotmat(0,0)/cos(E2))
+    }
+    DenseVector(E1, E2, E3)  //return
+  }
+
   def convertChildren(currentBones : List[String], motion:Int, frame:Int) {
      if (currentBones == Nil){
        //return
@@ -564,39 +579,6 @@ class Skeleton {
     DenseVector(cos(theta/2), rO(0)*sin(theta/2), rO(1)*sin(theta/2), rO(2)*sin(theta/2))  //return
   }
 
-  /* //This function is here purely for reference, I hard coded the unwraping into processing,
-   //so it would take less time, as I was already looping through the array there
-  def unwrap(p : DenseVector[Double]) : DenseVector[Double] = {
-    //MATLAB style unwrap: messy
-    val n : Int = p.length
-    val up = DenseVector.zeros[Double](p.size)
-    var pm1 : Double = p(0)
-    var po : Double = 0
-    val thr : Double = Pi- scalala.library.Library.pow(2, -52)
-    val pi2 : Double = 2*Pi
-    for(item<- 1 until n){
-      var cp = p(item) + po
-      var dp = cp - pm1
-      pm1 = cp
-      if(dp>thr){
-        while(dp>thr){
-          po = po - pi2
-          dp = dp - pi2
-        }
-      }
-      if (dp<(-thr)){
-        while(dp<(-thr)){
-          po = po + pi2
-          dp = dp + pi2
-        }
-      }
-      cp = p(item) + po
-      pm1 = cp
-      up(item) = cp
-    }
-    up
-  }*/
-
   def setPositionAndIndex(bone : SkeletonSegment){
     if (bone.name == "root") {
       for (i<- 0 until bone.order.length){
@@ -662,14 +644,26 @@ class Skeleton {
   }
   
   def lookUpAction(motion : Int,  frame : Int, bone : String) : DenseVector[Double] = {
-    Motions(motion).frames(frame).action.get(bone) match{
-      case Some(x) =>
-        DenseVector(x.toArray).t
-      case None => 
-        //println("No match in Get..." + bone)
-        //Motions(motion).frames(frame).action.foreach{case (key, value) => println(key)}
-        DenseVector.zeros[Double](3)
+    if (useFixedAction==0){
+      Motions(motion).frames(frame).action.get(bone) match{
+        case Some(x) =>
+          DenseVector(x.toArray).t
+        case None =>
+          //println("No match in Get..." + bone)
+          //Motions(motion).frames(frame).action.foreach{case (key, value) => println(key)}
+          DenseVector.zeros[Double](3)
+          //sys.exit()
+      }
+    } else{//get from array actionVector/ fixedAction
+      Motions(motion).frames(frame).fixedAction.get(bone) match{
+        case Some(x) =>
+          DenseVector(x.toArray).t
+        case None =>
+          //println("No match in Get..." + bone)
+          //Motions(motion).frames(frame).action.foreach{case (key, value) => println(key)}
+          DenseVector.zeros[Double](3)
         //sys.exit()
+      }
     }
   }
 

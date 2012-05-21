@@ -143,9 +143,10 @@ class MotionGenerator() {
 
   }
 
-  //change back to body centered coordinates
+  //change back to body centered coordinates; undo preprocess2
   def postprocess1() = DenseMatrix[Double]{//CHECK ROW VS COL HERE
-    var newdata  = repmat(visible.numRows,dataStd,0) :* visible + repmat(visible.numRows,dataMean,0)
+    //fix normalization (undo)
+    var newdata : DenseMatrix[Double]  = repmat(visible.numRows,dataStd,0) :* visible + repmat(visible.numRows,dataMean,0)
 
     //oh no not the unlabeled indexing of doom
     //newdata = //store newdata back into a skelton's Motions, Frames, etc
@@ -153,25 +154,139 @@ class MotionGenerator() {
     //newdata 4-6 = root pos
     //etc...reverse preprocessing essentially...
     //check for zeros or ignore?
+    //put back into separate frames in skeleton? or just save directly?
+    //newdata has: fixed visible so:
+      //0-2 root rot
+      //3-5 root pos
+      //each
 
-  }
-
-  //change back to reference coordinate system
-  def postprocess2(){
+    ////POSTPROCESS2
     //extract angles...
-    //var phi = root x rot
-    //var theta = root y rot (or is it z in this axis setup?)
-    //var vertrotdelta = root z rot
-    //var groundxdelta = root x pos
-    //var groundzdelta = root y pos
-    //var pos_x = posInd(1)
-    //var pos_y = posInd(2)
-    //var pos_z = posInd(3)
-    //var rot_x = expmapInd(1)
-    //var rot_y = expmapInd(2)
-    //var rot_z = expmapInd(3)
+    var phi = newdata(::, 0) //vector of root rotations
+    var theta = newdata(::,1)  //vector root y rot (or is it z in this axis setup?)
+    var vertrotdelta = newdata(::,2) //root z rot
+    var groundxdelta = newdata(::,3) //root x pos
+    var groundzdelta = newdata(::,4) //root y pos
+    var pos_x = skel.lookUpBone("root").posInd(0)
+    var pos_y = skel.lookUpBone("root").posInd(1)
+    var pos_z = skel.lookUpBone("root").posInd(2)
+    var rot_x = skel.lookUpBone("root").rotInd(0)//expmapInd
+    var rot_y = skel.lookUpBone("root").rotInd(1)
+    var rot_z = skel.lookUpBone("root").rotInd(2)
+
+    //temps
+    var m, dab, be, psi = 0.0
+    var ux, uy, uz  = 0.0
+    var uz_over_ux = 0.0
+    var a, b, c = 0.0
+    var vz, vx = 0.0
+    var rxx, rxy, rxz, ryx, ryy, ryz, rzx, rzy, rzz = 0.0
+    var u = DenseVector.zeros[Double](3)
+    var v = DenseVector.zeros[Double](3)
+
     //MOVE vertical postion back
-    //newdata(pos_y) = newdata(6)
+    newdata(pos_y) = newdata(6)
+
+    //FIRST FRAME
+    newdata(0,rot_y) = 0
+    newdata(0,pos_x) = 0
+    newdata(0,pos_z) = 0
+    //END FIRST FRAME
+
+    //ALL OTHER FRAMES
+    for(i <- 1 until newdata.numRows){
+      //Convert to standard reference frame
+      newdata(i,rot_y) = newdata(i-1,rot_y) + vertrotdelta(i-1)
+      //fix position with magnitude and offset
+      m = norm(DenseVector(groundxdelta(i-1), groundydelta(i-1)), 2)
+      dab = atan2(groundydelta(i-1),groundxdelta(i-1))
+      be = newdata(i-1,rot_y)
+      ///original orientation
+      al = be - dab
+      newdata(i,pos_x) = newdata(i-1,pos_x) + m*cos(al)
+      newdata(i,pos_z) = newdata(i-1,pos_z) + m*sin(al)
+
+    }
+
+    //CONVERT TO EXPMAPS (from body-centered)
+    for(i <- 0 until newdata.numRows){
+      //rewrap
+      psi = newdata(i,rot_y)%(2*Pi)
+      uy = -cos(theta(i))
+
+      //find x and z
+      ux = 0.0
+      uz = 0.0
+      uz_over_ux = 0.0
+      if (psi < Pi/2){
+        uz_over_ux = tan(psi)
+        ux = sqrt((1 - uy^2)/(1 + uz_over_ux^2))
+        uz = ux*uz_over_ux
+      } else if (psi < Pi ){
+        uz_over_ux = tan(Pi -psi)
+        ux = -sqrt((1 - uy^2)/(1 + uz_over_ux^2))
+        uz = ux*uz_over_ux
+      } else if(psi < (3*Pi/2)){
+        uz_over_ux = tan(psi-Pi)
+        ux = -sqrt((1 - uy^2)/(1 + uz_over_ux^2))
+        uz = ux*uz_over_ux
+      } else{
+        uz_over_ux = tan(2*Pi - psi)
+        ux = sqrt((1 - uy^2)/(1 + uz_over_ux)^2)
+        uz = -ux*uz_over_ux
+      }
+
+      //Solve for vz
+      a = (ux^2 + uz^2)
+      b = 2*uy*uz*vy
+      c = (ux^2 * vy^2 - ux^2 + uy^2 * vy^2)
+
+      //GEt solution for correct quadrant (right hip, not left)
+      if((psi > (3*Pi/2)) || (psi < Pi/2)){
+        vz = (-b + sqrt(b^2 - 4*a*c))/(2*a)
+      } else{
+        vz = (-b - sqrt(b^2 - 2*a*c))/(2*a)
+      }
+
+      //Get Rotation Matrix
+      vx = (uy*cos(phi(i)) - uz*vz) / ux
+      u = DenseVector(ux, uy, uz)
+      v = DenseVector(vx, vy, vz)
+      if(abs(norm(v,2)-1)> 1E5){
+        println("Not a unit vector..opps")
+        v = v/norm(v,2)//Force Unit Vector...this shouldn't have happened...
+      }
+
+      wv = -cross(u,v)
+
+      if(abs(u)-1 > 1E-5 || abs(norm(v)-1)>1E-5 || abs(norm(wv)-1)>1E-5){
+        println("Somethings is still not a unit vector...")
+      }
+
+      rxx = u dot DenseVector(1, 0, 0)
+      rxy = u dot DenseVector(0, 1, 0)
+      rxz = u dot DenseVector(0, 0, 1)
+      ryx = wv dot DenseVector(1, 0, 0)
+      ryy = wv dot DenseVector(0, 1, 0)
+      ryz = wv dot DenseVector(0, 0, 1)
+      rzx = v dot DenseVector(1, 0, 0)
+      rzy = v dot DenseVector(0, 1, 0)
+      rzz = v dot DenseVector(0, 0, 1)
+
+      var R = ((rxx,ryx,rzx),(rxy,ryy,rzy),(rxz,ryz,rzz)).t
+      var r = skel.rotmat2euler(R) //wow, rotmat = rotmap   ////MAY NEED TO TRANSFER TO CHILDREN......CHECK EULER2EXPMAP
+      newdata(i,rot_x) = r(0)
+      newdata(i,rot_y) = r(1)
+      newdata(i,rot_z) = r(2)
+      if (r.length>3){
+        println("r greater then 3...?")
+      }
+
+      //newdata now contains...:expmap coordinates...need euler before save? Yup
+
+
+    }
+
   }
 
   def gen() : DenseMatrix[Double] = {
