@@ -17,6 +17,7 @@ import scala.math._
 import scala.collection.mutable._
 import scalala.tensor.::
 import scala.util._
+import java.io._
 
 /**
  * Created by IntelliJ IDEA.
@@ -84,8 +85,9 @@ class Skeleton {
     var limits = List[(Double, Double)]()
     var parent : String = ""
     var children =  List[String]() //store names of children
-    var rotInd = DenseVector.zeros[Int](3)
-    var posInd = DenseVector.zeros[Int](3)
+    var rotInd = DenseVector.ones[Int](3)*-1
+    var posInd = DenseVector.ones[Int](3)*-1
+    var offsetInMatrix = 0
 
     def printSegmentDebug() {
       println("Name: " + name)
@@ -196,7 +198,9 @@ class Skeleton {
             temp.length = lin(1).toDouble
           }
         case "angle" => angleUnit = lin(1)
-        case "order" => temp.order = lin.tail
+        case "order" =>
+          temp.order = lin.tail
+          temp.dof = lin.tail
         case "id" => temp.id = lin(1).toInt
         case "name" => 
           temp.name = lin(1)
@@ -254,7 +258,7 @@ class Skeleton {
     val line = fromFile(filename).getLines()
     var where = ""
     var lin = Array[String]()
-    var currentValue = List[Double]()
+    var currentValue = MutableList[Double]()
     val currentAction = new Action
     val numCheck = """[1-9]+"""
     var tempFrames =  new Frames
@@ -281,11 +285,11 @@ class Skeleton {
         else if(segmentList.contains(lin(0))){
           //iter through dof and append to values list
           for (i<- 1 until lin.length){
-            currentValue = lin(i).toDouble :: currentValue
+            currentValue += lin(i).toDouble//need to be in correct order
           }
           //append value to segment motion
           currentAction.action += (lin(0) -> currentValue)
-          currentValue.drop(currentValue.length) //empty
+          currentValue.clear() //empty
         } else{
 
         }
@@ -299,7 +303,49 @@ class Skeleton {
   }
 
   def storeResultMotions(){
+    //store resultFrames in amc format
+    //.asf file should be same...? yeah...
+    var resultFile = new File("/data/result02.amc")
+    resultFile.createNewFile()
+    val writer = new FileWriter(resultFile.getPath)
+    //:FULLY-SPECIFIED
+    writer.write(":FULLY-SPECIFIED")
+    //:DEGREES
+    writer.write(":DEGREES")
+    //sort frames: frame 0 to ...
+    resultFrames.frames.sortWith(_.frameID < _.frameID)
+    //write each frame
+    for (i <- 0 until resultFrames.frames.length){
+      //frame number (1-...)
+      writer.write((resultFrames.frames(i).frameID+1).toString + "\n")
+      //write each bone: name val val val ...
+      storeResultBone(List("root"), writer, i)
+    }
+    //close FIle
+    writer.close()
+  }
 
+  def storeResultBone(children : List, writer : FileWriter, frame : Int){
+    //for each child
+    for (i<- 0 until children.length){
+      //check current child is in resultMotion frame
+      if (resultFrames.frames(frame).fixedAction.contains(children(i))){
+        //if it is, print name
+        writer.write(children(i) + " ")
+        //print values
+        var values = resultFrames.frames(frame).fixedAction(children(i))
+        for (j <- 0 until values.length){
+          //print each value in order (should be correct order already
+          writer.write(values(j).toString + " ")
+        }
+        writer.write("\n") //endline after each bone
+      } else {
+        println("Result Frames did not contain " + children(i))
+      }
+      //recursively print children of children
+      var bone = lookUpBone(children(i))
+      storeResultBone(bone.children, writer, frame)
+    }
   }
 
   //downsample (drop extra frames / interpolate)
@@ -420,7 +466,11 @@ class Skeleton {
         var list = DenseVector.zeros[Double](3)
         for (k<- 0 until bone.rotInd.length) { //till 3, really /bone.rotInd.length
           list = (lookUpAction(i, j, "root")).asCol
-          rotVal(k) = rotVal(k) + list(bone.rotInd(k))
+          if (bone.rotInd!=-1){
+            rotVal(k) = rotVal(k) + list(bone.rotInd(k))
+          } else {
+            rotVal(k) = 0
+          }
         }
         //make rotation matrix
         val rotMap = makeRotationMatrix(toRadians(rotVal(0)), toRadians(rotVal(1)), toRadians(rotVal(2)), bone.axisOrder)
@@ -444,8 +494,57 @@ class Skeleton {
 
   }
 
-  def rotmat2euler(rotmat: DenseMatrix[Double]) : DenseVector[Double] = {
-    var E1, E2, E3 = 0.0
+  def convertChildren(currentBones : List[String], motion:Int, frame:Int) {
+     if (currentBones == Nil){
+       //return
+     } else {
+       for (i<- 0 until currentBones.length){
+         val bone = lookUpBone(currentBones(i))
+         val rotVal = DenseVector.zeros[Double](3)
+         var list = DenseVector.zeros[Double](3)
+         for(j<- 0 until bone.rotInd.length){ //till 3 really / bone.rotInd.length
+           list = (lookUpAction(motion, frame, currentBones(i))).asCol
+           if (bone.rotInd!=-1){
+             rotVal(j) = list(bone.rotInd(j))
+           } else{
+             rotVal(j) = 0
+           }
+         }
+         //make rotation matrix
+         val rotMap = makeRotationMatrix(toRadians(rotVal(0)), toRadians(rotVal(1)), toRadians(rotVal(2)), bone.axisOrder)
+         //make expmap from rotmap
+         val rot = rotmap2expmap(rotMap)
+         //set channels (new values)
+         if(rot.length > 3){
+           println("ROT TOO LARGE?")
+         }
+         Motions(motion).frames(frame).fixedAction(currentBones(i)) = rot
+         if (Motions(0).frames(0).actionVector.length!=bone.offsetInMatrix){
+           if (bone.offsetInMatrix!=0){
+             println("Bone Offset in matrix has changed...Pad with zeros?")
+           } else{
+
+           }
+         }
+         bone.offsetInMatrix = Motions(motion).frames(frame).actionVector.length///get bone's position in matrix
+         var bone2 = lookUpBone(currentBones(i))
+         if (bone2.offsetInMatrix!=bone.offsetInMatrix){
+           println("OFFSET NOT SAVED")
+         }
+
+         for (k<-0 until  rot.length){
+           Motions(motion).frames(frame).actionVector += rot(k)
+         }
+         //expMapInd? not needed...
+         //convert children...Recurse, god I hope this finishes...
+         convertChildren(bone.children, motion, frame)
+       }
+     }
+     //end
+  }
+
+  def rotmat2euler(rotmat: DenseMatrix[Double]) : DenseVector[Double] = {//NEED TO PROPAGATE
+  var E1, E2, E3 = 0.0
     if (rotmat(0,2)==1 || rotmat(0,2) == -1){
       E3 = 0
       dlta = atan2(rotmat(0,1),rotmat(0,2))
@@ -461,41 +560,9 @@ class Skeleton {
       E1 = atan2(rotmat(1,2)/cos(E2), rotmat(2,2)/cos(E2))
       E3 = atan2(rotmat(0,1)/cos(E2), rotmat(0,0)/cos(E2))
     }
-    DenseVector(E1, E2, E3)  //return
+    DenseVector(E1.toDegrees, E2.toDegrees, E3.toDegrees)  //return
   }
 
-  def convertChildren(currentBones : List[String], motion:Int, frame:Int) {
-     if (currentBones == Nil){
-       //return
-     } else {
-       for (i<- 0 until currentBones.length){
-         val bone = lookUpBone(currentBones(i))
-         val rotVal = DenseVector.zeros[Double](3)
-         var list = DenseVector.zeros[Double](3)
-         for(j<- 0 until bone.rotInd.length){ //till 3 really / bone.rotInd.length
-           list = (lookUpAction(motion, frame, currentBones(i))).asCol
-           rotVal(j) = list(bone.rotInd(j))
-         }
-         //make rotation matrix
-         val rotMap = makeRotationMatrix(toRadians(rotVal(0)), toRadians(rotVal(1)), toRadians(rotVal(2)), bone.axisOrder)
-         //make expmap from rotmap
-         val rot = rotmap2expmap(rotMap)
-         //set channels (new values)
-         if(rot.length > 3){
-           println("ROT TOO LARGE?")
-         }
-         Motions(motion).frames(frame).fixedAction(currentBones(i)) = rot
-         for (k<-0 until  rot.length){
-           Motions(motion).frames(frame).actionVector += rot(k)
-         }
-         //expMapInd? not needed...
-         //convert children...Recurse, god I hope this finishes...
-         convertChildren(bone.children, motion, frame)
-       }
-     }
-     //end
-  }
-  
   def makeRotationMatrix(xAngle:Double, yAngle:Double,  zAngle:Double, order:String="zxy") : DenseMatrix[Double] = {
     val c1 = cos(xAngle)
     val c2 = cos(yAngle)

@@ -16,6 +16,7 @@ import scalala.library.LinearAlgebra._
 import scalala.library.Statistics._
 import scalala.library.Plotting._
 import scalala.operators.Implicits._
+import swing.Action
 
 /**
  * Created by IntelliJ IDEA.
@@ -148,25 +149,13 @@ class MotionGenerator() {
     //fix normalization (undo)
     var newdata : DenseMatrix[Double]  = repmat(visible.numRows,dataStd,0) :* visible + repmat(visible.numRows,dataMean,0)
 
-    //oh no not the unlabeled indexing of doom
-    //newdata = //store newdata back into a skelton's Motions, Frames, etc
-    //newdata 1-3 = root rot
-    //newdata 4-6 = root pos
-    //etc...reverse preprocessing essentially...
-    //check for zeros or ignore?
-    //put back into separate frames in skeleton? or just save directly?
-    //newdata has: fixed visible so:
-      //0-2 root rot
-      //3-5 root pos
-      //each
-
     ////POSTPROCESS2
-    //extract angles...
+    //extract angles...//newdata is in...expmap form, need to return to euler angles...
     var phi = newdata(::, 0) //vector of root rotations
     var theta = newdata(::,1)  //vector root y rot (or is it z in this axis setup?)
     var vertrotdelta = newdata(::,2) //root z rot
     var groundxdelta = newdata(::,3) //root x pos
-    var groundzdelta = newdata(::,4) //root y pos
+    var groundydelta = newdata(::,4) //root y pos
     var pos_x = skel.lookUpBone("root").posInd(0)
     var pos_y = skel.lookUpBone("root").posInd(1)
     var pos_z = skel.lookUpBone("root").posInd(2)
@@ -184,8 +173,8 @@ class MotionGenerator() {
     var u = DenseVector.zeros[Double](3)
     var v = DenseVector.zeros[Double](3)
 
-    //MOVE vertical postion back
-    newdata(pos_y) = newdata(6)
+    //MOVE vertical position back
+    newdata(::,pos_y) = newdata(::,6)
 
     //FIRST FRAME
     newdata(0,rot_y) = 0
@@ -273,20 +262,88 @@ class MotionGenerator() {
       rzy = v dot DenseVector(0, 1, 0)
       rzz = v dot DenseVector(0, 0, 1)
 
-      var R = ((rxx,ryx,rzx),(rxy,ryy,rzy),(rxz,ryz,rzz)).t
-      var r = skel.rotmat2euler(R) //wow, rotmat = rotmap   ////MAY NEED TO TRANSFER TO CHILDREN......CHECK EULER2EXPMAP
-      newdata(i,rot_x) = r(0)
-      newdata(i,rot_y) = r(1)
-      newdata(i,rot_z) = r(2)
+      var R = ((rxx,ryx,rzx),(rxy,ryy,rzy),(rxz,ryz,rzz)).t //This is not in zyx form...?
+      /*var r = skel.rotmap2expmap(R)//skel.rotmat2euler(R) //wow, rotmat = rotmap   ////MAY NEED TO TRANSFER TO CHILDREN......CHECK EULER2EXPMAP */
+      //need to change into Euler Angles instead, need to propogate?
+      var r = skel.rotmat2euler(R)
+      if (rot_x!=-1){
+        newdata(i,rot_x) = r(0)
+      }
+      if (rot_y!=-1){
+        newdata(i,rot_y) = r(1)
+      }
+      if (rot_z!=-1){
+        newdata(i,rot_z) = r(2)
+      }
       if (r.length>3){
         println("r greater then 3...?")
       }
+      //write to skeleton
+      var tempAction = new skel.Action
+      tempAction.frameID = i //set frame number to i
+      //add root
+      var tempVector = DenseVector.zeros[Double](6)
+      tempVector(::) = newdata(i,0 to skel.lookUpBone("root").dof.length)//how many degrees of freedom = how many values per bone
+      tempAction.fixedAction("root") = tempVector
 
-      //newdata now contains...:expmap coordinates...need euler before save? Yup
+      //repeat above for children:
+      postprocessChildren(skel.lookUpBone("root").children, i, newdata, tempAction)
 
+      //tempAction now full of 1 frame of data for all bones (we hope)
+      skel.resultFrames.frames += tempAction
 
-    }
+    }//end all frames processed
 
+    //skel.resultFrames now contains all frames, all bones, etc...try to save to file...
+
+  }
+
+  def postprocessChildren(children : List[String], frame : Int, newdata : DenseMatrix[Double], tempAction : skel.Action){//newdata, tempAction (add to tempAction.fixedAction
+    for(i <- 0 until children.length){
+      //get bone
+      var bone = skel.lookUpBone(children(i))
+      //Find rot vector in newdata
+      var rot = DenseVector.zeros[Double](3)
+      for (i<-0 until bone.rotInd.length){
+        if (rotInd(i)!=-1){
+          rot(i) = newdata(frame, bone.offsetInMatrix+bone.rotInd(i))
+        } else{
+          rot(i) = 0
+        }
+      }
+      //expmap2rotmap
+      //rotmat2euler
+      var rotFixed = skel.rotmat2euler(skel.expmap2rotmap(rot))///Hope this is correct
+      //move pos and rot to tempAction
+      //check order
+      //not all degrees of freedom, check exist, leave out if 0 by default
+      var valueVector = DenseVector.zeros[Double](bone.dof.length)
+      for (j <- 0 until bone.dof.length){
+        //add what exists in dof, check that others are zero, if they aren't...well that's bad
+        if (bone.dof(j) == "tx"){
+          valueVector(bone.posInd(0)) = newdata(frame,bone.offsetInMatrix+bone.posInd(0))
+        } else if (bone.dof(i) == "ty"){
+          valueVector(bone.posInd(1)) = newdata(frame,bone.offsetInMatrix+bone.posInd(1))
+        } else if (bone.dof(i) == "tz"){
+          valueVector(bone.posInd(2)) = newdata(frame,bone.offsetInMatrix+bone.posInd(2))
+        } else if (bone.dof(i) == "rx"){
+          valueVector(bone.rotInd(0)) = rotFixed(0)
+        } else if (bone.dof(i) == "ry"){
+          valueVector(bone.rotInd(1)) = rotFixed(1)
+        } else if (bone.dof(i) == "rz"){
+          valueVector(bone.rotInd(2)) = rotFixed(2)
+        } else {
+          println("No order match..." + bone.dof(i))
+          sys.exit()
+        }
+      }
+      //ValueVector should contain whatever needs to be printed next to the given bone, now add it to tempAction
+      tempAction.fixedAction(children(i)) = valueVector
+
+      //recurse to children
+      postprocessChildren(bone.children,frame,newdata,tempAction)
+
+    }//end children update
   }
 
   def gen() : DenseMatrix[Double] = {
